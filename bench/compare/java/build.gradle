@@ -1,0 +1,27 @@
+// Java harness for the comparison benchmark (see ../build.sh). kdl4j is compiled from the pinned clone
+// (../deps/kdl4j, fetched by ../fetch.sh) together with the harness; its only dependency is the
+// jakarta.annotation API. `gradle installDist` puts a launcher under build/install/kdlbench.
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'jakarta.annotation:jakarta.annotation-api:3.0.0'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src', '../deps/kdl4j/kdl4j/src/main/java']
+        }
+    }
+}
+
+application {
+    mainClass = 'KdlBench'
+    applicationName = 'kdlbench'
+}

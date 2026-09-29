@@ -1,0 +1,13 @@
+[package]
+name = "kdlbench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The pinned clone fetched by ../fetch.sh (kdl 6.7.1, KDL v2, format-preserving)
+kdl = { path = "../deps/kdl-rs" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

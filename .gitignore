@@ -1,0 +1,33 @@
+build/
+dist/
+bin/
+obj/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+BeefSpace_User.toml
+BeefSpace_Lock.toml
+
+# The official KDL spec and test suite (CC BY-SA 4.0), fetched at a pinned commit by tests/fetch-spec.sh
+tests/kdl-spec/
+
+# Test script logs
+test-*.log
+
+# Benchmark comparison: fetched implementations, toolchains, builds and generated inputs
+bench/compare/deps/
+bench/compare/bin/
+bench/compare/inputs/
+bench/compare/rust/target/
+bench/compare/cs/bin/
+bench/compare/cs/obj/
+bench/compare/java/build/
+bench/compare/java/.gradle/
+bench/compare/js/node_modules/
+bench/compare/python/.venv/
+bench/compare/zig/.zig-cache/
+bench/compare/c/build/

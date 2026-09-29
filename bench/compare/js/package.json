@@ -1,0 +1,10 @@
+{
+  "name": "kdlbench",
+  "private": true,
+  "type": "module",
+  "description": "JavaScript harness for the KDL comparison benchmark (see ../build.sh); both libraries come from the pinned clones in ../deps",
+  "dependencies": {
+    "@bgotink/kdl": "file:../deps/bgotink-kdl",
+    "kdljs": "file:../deps/kdljs"
+  }
+}

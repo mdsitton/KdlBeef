@@ -1,0 +1,9 @@
+FileVersion = 1
+
+[Project]
+Name = "KdlTester"
+StartupObject = "KdlTester.Program"
+
+[Dependencies]
+corlib = "*"
+KdlBeef = "*"

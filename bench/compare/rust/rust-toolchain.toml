@@ -1,0 +1,4 @@
+# The comparison is built with a pinned Rust (toml-spanner needs 1.90+); the rest of the repo is unaffected.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

@@ -1,0 +1,28 @@
+FileVersion = 1
+
+[Workspace]
+StartupProject = "KdlTester"
+
+[Projects]
+KdlBeef = {Path = "."}
+KdlTester = {Path = "KdlTester"}
+
+# Runs the [Test] methods with Release settings (O2, CRT allocator, no runtime checks):
+#   beefbuild -test -config=TestRelease
+[Configs.TestRelease.Linux64]
+BuildKind = "Test"
+
+# Windows builds link with Beef's bundled lld-link (LLVM toolset) in every config. Beef defaults
+# Debug/Test to MSVC's link.exe; with LLVM, MSVC only supplies the CRT and Windows SDK libraries.
+[Configs.Debug.Win64]
+Toolset = "LLVM"
+
+[Configs.Test.Win64]
+Toolset = "LLVM"
+
+[Configs.Release.Win64]
+Toolset = "LLVM"
+
+[Configs.TestRelease.Win64]
+BuildKind = "Test"
+Toolset = "LLVM"
