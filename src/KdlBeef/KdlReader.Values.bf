@@ -22,10 +22,14 @@ extension KdlReaderCore<TCursor>
 		if (!Avail(mPos))
 			return .Err(Unexpected("a value"));
 		char8 b = mData[mPos];
-		if (b == '"')
-			return .Ok(.String(Try!(ReadQuotedString(buffer))));
-		if (b == '#')
-			return ReadHashToken(buffer);
+		if (b == '"' || b == '#')
+		{
+			// Recovery skips a string whole from its start: an error inside it leaves mPos anywhere
+			mStringStart = mPos;
+			let value = (b == '"') ? KdlValue.String(Try!(ReadQuotedString(buffer))) : Try!(ReadHashToken(buffer));
+			mStringStart = -1;
+			return .Ok(value);
+		}
 		if (!CanStartValue(mPos))
 			return .Err(Unexpected("a value"));
 		return ReadBareToken();

@@ -178,7 +178,11 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 	int mBytesRead;
 	int mMaxInputBytes;
 	int mMaxTokenBytes;
+	/// Lines counted up to the bytes dropped from the buffer: nothing before it can be located.
 	KdlLineCounter mLines;
+	/// Lines counted forward for Locate (positions, early locations); a request behind it counts
+	/// from mLines instead, so any offset still in the buffer can be located.
+	KdlLineCounter mLocated;
 
 	public this(Stream stream, KdlStreamState state, KdlReadConfig config)
 	{
@@ -192,6 +196,7 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		mMaxInputBytes = config.MaxInputBytes;
 		mMaxTokenBytes = config.MaxTokenBytes;
 		mLines = .(0);
+		mLocated = .(0);
 		state.mHasError = false;
 		int size = config.StreamBufferBytes > 0 ? Math.Max(config.StreamBufferBytes, 16) : 64 * 1024;
 		state.mBuffer.Count = size;
@@ -208,6 +213,7 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		int start = KdlChar.StartsWithBom(Buffer, mRaw) ? 3 : 0;
 		mValid = start;
 		mLines = .(start);
+		mLocated = .(start);
 		// Finish the first buffer, and validate it: in-memory input is validated before reading, so a
 		// document that fits the buffer reports the same first error either way
 		while (mRaw < mState.mBuffer.Count && !mDone)
@@ -229,6 +235,8 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 			if (drop > 0)
 			{
 				mLines.AdvanceTo(Buffer - mBase, Math.Max(mBase + drop, mLines.mPos), mBase + mRaw);
+				if (mLocated.mPos < mLines.mPos)
+					mLocated = mLines;
 				Internal.MemMove(Buffer, Buffer + drop, mRaw - drop);
 				mBase += drop;
 				mRaw -= drop;
@@ -332,9 +340,19 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		column = 0;
 		if (offset < mLines.mPos)
 			return false;
-		mLines.AdvanceTo(Buffer - mBase, Math.Min(offset, mBase + mRaw), mBase + mRaw);
-		line = mLines.mLine;
-		column = mLines.mColumn;
+		int target = Math.Min(offset, mBase + mRaw);
+		if (target >= mLocated.mPos)
+		{
+			mLocated.AdvanceTo(Buffer - mBase, target, mBase + mRaw);
+			line = mLocated.mLine;
+			column = mLocated.mColumn;
+			return true;
+		}
+		// Behind the forward count (an error at an earlier offset): count from the dropped bytes
+		var lines = mLines;
+		lines.AdvanceTo(Buffer - mBase, target, mBase + mRaw);
+		line = lines.mLine;
+		column = lines.mColumn;
 		return true;
 	}
 }

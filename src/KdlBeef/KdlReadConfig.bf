@@ -23,6 +23,15 @@ public struct KdlReadConfig
 	/// (ReadFile uses the path when this is empty). Only read during the call; copies are kept.
 	public StringView SourceName = default;
 
+	/// @brief Report every error instead of stopping at the first (for hot reload): after a syntax
+	/// error the reader skips the rest of the broken node (to its newline or `;`, over strings,
+	/// comments and children blocks) and goes on. KdlReader.Next returns each error and continues on
+	/// the next call; a KdlDocument keeps what it could read and lists the errors in `Errors`.
+	/// Encoding, I/O and resource-limit errors still stop the read.
+	public bool CollectErrors = false;
+	/// @brief With CollectErrors: stop after this many errors. 0 = unlimited.
+	public int MaxErrors = 100;
+
 	/// @brief Maximum node nesting depth: 1 allows top-level nodes only. 0 = unlimited.
 	public int MaxDepth = 256;
 	/// @brief Maximum input size in bytes. 0 = unlimited.

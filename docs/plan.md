@@ -330,7 +330,7 @@ first-byte dispatch, number fast paths, arena strings, no per-token allocation. 
 benchmark inputs: document parse ≥ 150 MB/s, event reader ≥ 300 MB/s, canonical write ≥ 300 MB/s
 (ckdl, the fastest today: ~40 MB/s events, ~25 MB/s document).
 
-**Phase 4 — Errors, positions, limits, streams.** *Done except collect-errors: golden messages,
+**Phase 4 — Errors, positions, limits, streams.** *Done: golden messages, collect-errors (opt-in),
 positions, limits, and streams through a generic cursor (`architecture.md` §3).*
 Located messages for every `_fail` case (golden files), collect-errors mode with recovery, Positions
 sidecar, resource limits, `Read(Stream)` through the buffered cursor (all input paths identical).

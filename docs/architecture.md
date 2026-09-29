@@ -86,12 +86,31 @@ comment, string and whitespace scans only look for their own stop characters, an
 and spaces are recognized by their UTF-8 bytes (every non-ASCII one starts with 0xC2, 0xE1, 0xE2 or
 0xE3).
 
+### Collect-errors
+
+With `KdlReadConfig.CollectErrors` an error does not stop the read (`AfterError`): the core records
+it (Next returns it) and `Recover` skips the rest of the broken node with `SkipToTerminator`, to its
+newline or `;` (consumed), or the `}` or end that closes its parent, stepping over strings (a string
+the error was in is restarted from its opening quote, `mStringStart`), comments, line continuations
+and balanced children blocks without checking them. A node whose `StartNode` was reported gets its
+`EndNode` next (`mEndAfterRecovery`); unclosed blocks at the end are reported once and then closed
+one `EndNode` per call (`mClosingAtEnd`); a stray `}` is dropped; an error at the same offset twice
+advances one byte, so recovery always progresses. `mSuppressed` is recounted from the frames.
+Encoding, I/O and resource-limit errors, and `MaxErrors` (100 by default), still stop the read
+(`IsStopped`). `KdlDocument` keeps what it read and copies each error's message into its store
+(`Errors`); `Read` returns the first. The suite runs a fourth time in this mode (first error = the
+golden one), and random mutations of the suite's inputs never crash or hang it.
+
 ### Positions and error locations
 
-Errors and positions are located by the cursor (`Locate`), with a forward `KdlLineCounter`: the byte
-cursor counts from its last answer (or from the start for an earlier offset); the stream cursor
-counts as it drops bytes and cannot look back, so the reader locates a children block's `{` when it
-reads it (`LocatesOnlyForward`), for the unclosed-block error at the end of the input.
+Errors and positions are located by the cursor (`Locate`), with forward `KdlLineCounter`s: the byte
+cursor counts from its last answer (or from the start for an earlier offset). The stream cursor keeps
+one counter at the bytes it has dropped (nothing before it can be located) and one that moves forward
+for requests (an earlier request counts from the first). Offsets an error may report after the window
+has moved past them are located when read (`LocatesOnlyForward`, `LocateEarly`, `FailAt`): a
+children block's `{` (for the unclosed-block error at the end), a `/* */` comment's start, a line
+continuation's `\` and a slashdash's `/-`. A random-mutation comparison of stream and in-memory reads
+of the suite's inputs finds no difference other than the documented order of encoding errors.
 
 ### The state machine
 

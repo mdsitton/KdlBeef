@@ -38,7 +38,10 @@ public enum KdlEvent : uint8
 /// buffer and the longest construct). Everything is validated, including slashdashed (`/-`) nodes,
 /// entries and children blocks, which produce no events. The first error ends the read: `Next`
 /// returns it again on every later call. An in-memory input is checked for encoding errors before the
-/// first event; a stream as it is read, so events may come before an encoding error further on.
+/// first event; a stream as it is read, so events may come before an encoding error further on, and a
+/// document with both a syntax error and a later encoding error reports the encoding error from
+/// memory but the syntax error from a stream (that fits no buffer). Otherwise both give the same
+/// events and errors.
 ///
 /// ```
 /// let reader = scope KdlReader(text);
@@ -140,8 +143,15 @@ public class KdlReader
 	/// `}`), so Offset ..< EndOffset spans the whole node. EndOfDocument: the input's length.
 	public int EndOffset => mStreaming ? mStream.mEventEnd : mBytes.mEventEnd;
 
+	/// @brief Whether the read has stopped at an error: after any error, or with
+	/// KdlReadConfig.CollectErrors only after one that cannot be skipped (encoding, I/O, a resource
+	/// limit, MaxErrors). Next then returns that error again.
+	public bool IsStopped => mStreaming ? mStream.IsStopped : mBytes.IsStopped;
+
 	/// @brief Read up to the next event.
-	/// @return The event, or the first error in the document.
+	/// @return The event, or an error: the read's last (see IsStopped), or with
+	/// KdlReadConfig.CollectErrors one of several, after which the next call goes on with what follows
+	/// the broken node.
 	[Inline]
 	public Result<KdlEvent, KdlParseError> Next()
 	{
@@ -241,6 +251,13 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 
 	KdlReadConfig mConfig;
 	int mNodeCount;
+	// CollectErrors: errors so far, where the last one was, and the steps recovery left to do
+	int mErrorCount;
+	int mLastErrorOffset;
+	/// The start of the string being read (-1: none), where recovery restarts after an error in it.
+	int mStringStart;
+	bool mEndAfterRecovery;
+	bool mClosingAtEnd;
 
 	public this()
 	{
@@ -262,6 +279,11 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		mRetain = int.MaxValue;
 		mInputFailed = false;
 		mNodeCount = 0;
+		mErrorCount = 0;
+		mLastErrorOffset = -1;
+		mStringStart = -1;
+		mEndAfterRecovery = false;
+		mClosingAtEnd = false;
 		mEventEnd = 0;
 		mLastTokenEnd = 0;
 		mState = .Start;
@@ -286,8 +308,174 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			return .Err(.());
 		let result = ReadNext();
 		if (result case .Err)
-			mState = .Failed;
+			AfterError();
 		return result;
+	}
+
+	/// Whether the read has stopped (after an error that cannot be skipped).
+	public bool IsStopped => mState == .Failed;
+
+	/// After an error: stop, or with CollectErrors skip the broken node and go on.
+	void AfterError()
+	{
+		bool fatal = mInputFailed || mError.mKind == .ResourceLimitExceeded || mError.mKind == .IoError ||
+			mError.mKind == .InvalidUtf8 || mError.mKind == .DisallowedCodePoint;
+		if (!mConfig.CollectErrors || fatal || mState == .Start || (mConfig.MaxErrors > 0 && ++mErrorCount >= mConfig.MaxErrors))
+		{
+			mState = .Failed;
+			return;
+		}
+		Recover();
+	}
+
+	/// Skips what is left of the node the error was in: to its terminator (a newline or `;`,
+	/// consumed), or to the `}` or end that closes its parent. Strings, comments, line continuations
+	/// and whole children blocks on the way are stepped over. A node that was started gets its EndNode.
+	void Recover()
+	{
+		// An error inside a string: restart at its opening quote (or `#`), so it is skipped whole
+		if (mStringStart >= 0)
+		{
+			mPos = mStringStart;
+			mStringStart = -1;
+		}
+		int start = mPos;
+		// The reader was inside a started node's entries, or between nodes (a node's head: not started)
+		bool inNode = mState == .Entries;
+		if (mState == .Nodes && Avail(mPos) && mData[mPos] == '}' && mFrames.Count == 0)
+		{
+			// A `}` without its `{`: drop it
+			mPos++;
+		}
+		else if (mState == .Nodes && !Avail(mPos) && mFrames.Count > 0)
+		{
+			// Unclosed blocks at the end: close them, one EndNode per call
+			mClosingAtEnd = true;
+		}
+		else
+		{
+			SkipToTerminator();
+			// A `}` that closes no block (the current node's frame is not a block): drop it too
+			if (Avail(mPos) && mData[mPos] == '}' && mFrames.Count <= (inNode ? 1 : 0))
+				mPos++;
+			// Always make progress: an error at the same spot again would loop
+			if (mPos == start && Avail(mPos) && start == mLastErrorOffset)
+				mPos++;
+		}
+		mLastErrorOffset = start;
+		mRetain = int.MaxValue;
+		mPendingSpace = false;
+		mEndAfterRecovery = inNode && mFrames.Count > 0;
+		mState = inNode ? .Entries : .Nodes;
+		// Slashdashed entries raise mSuppressed only while they are read: count from the frames again
+		mSuppressed = 0;
+		for (let frame in mFrames)
+		{
+			if (frame.mSlashdashed)
+				mSuppressed++;
+			if (frame.mChildrenSlashdashed)
+				mSuppressed++;
+		}
+	}
+
+	/// Recovery: moves to the end of the current node, stepping over its strings, comments, line
+	/// continuations and children blocks without checking them.
+	void SkipToTerminator()
+	{
+		int depth = 0;
+		while (Avail(mPos))
+		{
+			int newline = NewlineAt(mPos);
+			if (newline > 0)
+			{
+				mPos += newline;
+				if (depth == 0)
+					return;
+				continue;
+			}
+			char8 c = mData[mPos];
+			switch (c)
+			{
+			case ';':
+				mPos++;
+				if (depth == 0)
+					return;
+			case '{':
+				depth++;
+				mPos++;
+			case '}':
+				if (depth == 0)
+					return;
+				depth--;
+				mPos++;
+			case '"':
+				SkipStringForRecovery(0);
+			case '#':
+				int hashes = 0;
+				while (Avail(mPos + hashes) && mData[mPos + hashes] == '#')
+					hashes++;
+				if (Avail(mPos + hashes) && mData[mPos + hashes] == '"')
+				{
+					mPos += hashes;
+					SkipStringForRecovery(hashes);
+				}
+				else
+					mPos += hashes;
+			case '/':
+				if (PeekAt(1) == '*')
+				{
+					// An unterminated comment runs to the end; that is fine here (and must not
+					// replace the error being reported)
+					ScanBlockComment();
+				}
+				else if (PeekAt(1) == '/')
+				{
+					SkipSingleLineComment();
+					if (depth == 0)
+						return;
+				}
+				else
+					mPos++;
+			case '\\':
+				// A line continuation: the node goes on after the newline
+				mPos++;
+				while (Avail(mPos) && SpaceAt(mPos) > 0)
+					mPos += SpaceAt(mPos);
+				if (Avail(mPos))
+					mPos += Math.Max(NewlineAt(mPos), 0);
+			default:
+				mPos++;
+			}
+		}
+	}
+
+	/// Recovery: steps over a quoted (`hashes` 0) or raw string at mPos, to its closing quotes, or for
+	/// a single-line one the end of its line.
+	void SkipStringForRecovery(int hashes)
+	{
+		bool multiLine = PeekAt(1) == '"' && PeekAt(2) == '"';
+		mPos += multiLine ? 3 : 1;
+		while (Avail(mPos))
+		{
+			char8 c = mData[mPos];
+			if (c == '\\' && hashes == 0)
+			{
+				mPos += 2;
+				continue;
+			}
+			if (!multiLine && NewlineAt(mPos) > 0)
+				return;
+			if (c == '"' && (!multiLine || (PeekAt(1) == '"' && PeekAt(2) == '"')))
+			{
+				int after = mPos + (multiLine ? 3 : 1);
+				if (HashesAt(after, hashes))
+				{
+					mPos = after + hashes;
+					return;
+				}
+			}
+			mPos++;
+		}
 	}
 
 	public Result<KdlEvent, KdlParseError> Next()
@@ -330,6 +518,13 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 						return .Err(Fail(.IoError, "", mPos));
 					if (mFrames.Count > 0)
 					{
+						if (mClosingAtEnd)
+						{
+							// CollectErrors, after reporting an unclosed block: close what is open
+							if (EndNode())
+								return .Ok(.EndNode);
+							continue;
+						}
 						ref Frame open = ref mFrames.Back;
 						return .Err(FailAt(.UnbalancedBraces, "Expected `}` to close this children block", open.mBraceOffset, open.mBraceLine, open.mBraceColumn));
 					}
@@ -390,6 +585,14 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 				}
 
 			case .Entries:
+				if (mEndAfterRecovery)
+				{
+					// CollectErrors: the rest of this node was skipped
+					mEndAfterRecovery = false;
+					if (EndNode())
+						return .Ok(.EndNode);
+					continue;
+				}
 				mRetain = int.MaxValue;
 				bool space = mPendingSpace;
 				mPendingSpace = false;
@@ -537,12 +740,14 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	Result<void, KdlFailure> ReadSlashdash()
 	{
 		int start = mPos;
+		// The line-space after it may move a stream's window past it
+		LocateEarly(start, let line, let column);
 		mPos += 2;
 		Try!(SkipLineSpace());
 		if (Avail(mPos) && mData[mPos] == '/' && PeekAt(1) == '-')
 			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot be followed by another slashdash", mPos, 2));
 		if (!Avail(mPos) || mData[mPos] == '}' || mData[mPos] == ';')
-			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` must be followed by a node, argument, property or children block", start, 2));
+			return .Err(FailAt(.InvalidSlashdash, "A slashdash `/-` must be followed by a node, argument, property or children block", start, line, column, 2));
 		return .Ok;
 	}
 
@@ -662,6 +867,30 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	Result<void, KdlFailure> SkipBlockComment()
 	{
 		int start = mPos;
+		// A stream may drop the comment's start before its end is found: locate it now
+		LocateEarly(start, let line, let column);
+		if (!ScanBlockComment())
+			return .Err(FailAt(.UnterminatedComment, "Unterminated comment: expected `*/`", start, line, column, 2));
+		return .Ok;
+	}
+
+	/// For a stream (which only locates forward), the line and column of `pos`, for an error that may
+	/// be reported after the window has moved on; 0 for in-memory input (located when needed).
+	[Inline]
+	void LocateEarly(int pos, out int line, out int column)
+	{
+		line = 0;
+		column = 0;
+		if (mCursor.LocatesOnlyForward && mCursor.Locate(pos, var l, var c))
+		{
+			line = l;
+			column = c;
+		}
+	}
+
+	/// Skips a `/* */` comment (nested ones too). @return Whether it was closed (else mPos is at the end).
+	bool ScanBlockComment()
+	{
 		mPos += 2;
 		int depth = 1;
 		while (Avail(mPos))
@@ -671,7 +900,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			{
 				mPos += 2;
 				if (--depth == 0)
-					return .Ok;
+					return true;
 				continue;
 			}
 			if (b == '/' && PeekAt(1) == '*')
@@ -682,7 +911,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			}
 			mPos++;
 		}
-		return .Err(Fail(.UnterminatedComment, "Unterminated comment: expected `*/`", start, 2));
+		return false;
 	}
 
 	/// Skips a `//` comment and the newline that ends it.
@@ -723,6 +952,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			if (!Avail(mPos) || mData[mPos] != '\\')
 				return any;
 			int start = mPos;
+			LocateEarly(start, let line, let column);
+			char8 previous = Before(start);
 			mPos++;
 			Try!(SkipWhitespace());
 			if (Avail(mPos))
@@ -734,9 +965,9 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					int n = NewlineAt(mPos);
 					if (n == 0)
 					{
-						if (IsIdentifierByte(Before(start)))
-							return .Err(Fail(.InvalidLineContinuation, "`\\` cannot appear in an identifier string: quote the string (a `\\` at the end of a line continues the node)", start));
-						return .Err(Fail(.InvalidLineContinuation, "A line continuation `\\` must be followed by a newline or a `//` comment", start));
+						if (IsIdentifierByte(previous))
+							return .Err(FailAt(.InvalidLineContinuation, "`\\` cannot appear in an identifier string: quote the string (a `\\` at the end of a line continues the node)", start, line, column));
+						return .Err(FailAt(.InvalidLineContinuation, "A line continuation `\\` must be followed by a newline or a `//` comment", start, line, column));
 					}
 					mPos += n;
 				}
@@ -999,11 +1230,11 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	}
 
 	/// Fail at a position located earlier (line 0: locate it now, as Fail does).
-	KdlFailure FailAt(KdlErrorKind kind, StringView message, int offset, int line, int column)
+	KdlFailure FailAt(KdlErrorKind kind, StringView message, int offset, int line, int column, int length = 1)
 	{
 		if (line == 0 || (mInputFailed && mCursor.TryGetInputError(?)))
-			return Fail(kind, message, offset);
-		mError = KdlParseError(kind, message, line, column, offset, 1);
+			return Fail(kind, message, offset, length);
+		mError = KdlParseError(kind, message, line, column, offset, length);
 		if (!mConfig.SourceName.IsEmpty)
 			mError.SetSource(mConfig.SourceName);
 		return .();

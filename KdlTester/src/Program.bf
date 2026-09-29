@@ -12,6 +12,7 @@ namespace KdlTester;
 ///                                By default through a KdlDocument; `-events` formats straight from
 ///                                the KdlReader's events (KdlCanonical.Format)
 ///   KdlTester -stream N [file]   the same through a document read from a Stream with an N-byte buffer
+///   KdlTester -collect [file]    through a document read with CollectErrors: every error, one per line
 ///   KdlTester -bench <parse|events|write> <file> <min-samples>
 ///                                the bench/compare harness (see bench/compare/run.sh): prints
 ///                                `nodes: N`, then the median time of a document read (parse), a
@@ -46,6 +47,7 @@ class Program
 		}
 
 		bool events = false;
+		bool collect = false;
 		int streamBuffer = 0;
 		String path = null;
 		for (int i < args.Count)
@@ -53,6 +55,8 @@ class Program
 			let arg = args[i];
 			if (arg == "-events")
 				events = true;
+			else if (arg == "-collect")
+				collect = true;
 			else if (arg == "-stream" && i + 1 < args.Count && int.Parse(args[i + 1]) case .Ok(let size))
 			{
 				streamBuffer = size;
@@ -126,9 +130,13 @@ class Program
 		else
 		{
 			let doc = scope KdlDocument();
+			doc.ReadConfig.CollectErrors = collect;
 			if (doc.Read(input) case .Err(let error))
 			{
-				Console.Error.WriteLine(error.ToString(.. scope .()));
+				if (!collect)
+					Console.Error.WriteLine(error.ToString(.. scope .()));
+				for (let collected in doc.Errors)
+					Console.Error.WriteLine(collected.ToString(.. scope .()));
 				return 1;
 			}
 			doc.Write(output);

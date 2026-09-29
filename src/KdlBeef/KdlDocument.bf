@@ -88,6 +88,8 @@ public class KdlDocument
 	internal List<KdlRangeRecord> mEntryRanges ~ delete _;
 	/// The source name of the last read (for errors and ranges).
 	internal String mSourceName ~ delete _;
+	/// The errors of the last read with CollectErrors (messages in the store).
+	List<KdlParseError> mErrors ~ delete _;
 	/// Changes on every Clear and Read, so handles from before can tell they are stale.
 	internal uint32 mGeneration;
 	/// The reader behind Read, kept for its buffers.
@@ -107,6 +109,7 @@ public class KdlDocument
 		mNodeRanges = new .();
 		mEntryRanges = new .();
 		mSourceName = new .();
+		mErrors = new .();
 		mNodes.Add(default);
 		mGeneration = 1;
 	}
@@ -127,6 +130,7 @@ public class KdlDocument
 		mNodeRanges.Clear();
 		mEntryRanges.Clear();
 		mSourceName.Clear();
+		mErrors.Clear();
 		mNodes.Add(default);
 		mGeneration++;
 	}
@@ -152,12 +156,13 @@ public class KdlDocument
 	/// @brief Replace the document's content with the KDL document in `text`.
 	/// @param text The document (UTF-8; a leading BOM is skipped).
 	/// @param config Metadata, source name and limits.
-	/// @return .Ok, or the first error; the document is then empty.
+	/// @return .Ok, or the first error. The document is then empty; with config.CollectErrors it keeps
+	/// what could be read, and `Errors` lists every error.
 	public Result<void, KdlParseError> Read(StringView text, KdlReadConfig config)
 	{
 		let readerConfig = BeginRead(config);
 		mReader.Reset(text, readerConfig);
-		return EndRead(Build(mReader, config.MetadataMode == .Positions));
+		return EndRead(Build(mReader, config), config);
 	}
 
 	/// @brief Replace the document's content with the KDL document read from a stream, using
@@ -174,13 +179,18 @@ public class KdlDocument
 	/// construct (see `config.MaxTokenBytes`); the document itself grows with the content.
 	/// @param stream The document (UTF-8; a leading BOM is skipped), read from its current position.
 	/// @param config Metadata, source name, limits and buffer size.
-	/// @return .Ok, or the first error (IoError if reading fails); the document is then empty.
+	/// @return .Ok, or the first error (IoError if reading fails). The document is then empty; with
+	/// config.CollectErrors it keeps what could be read, and `Errors` lists every error.
 	public Result<void, KdlParseError> Read(Stream stream, KdlReadConfig config)
 	{
 		let readerConfig = BeginRead(config);
 		mReader.Reset(stream, readerConfig);
-		return EndRead(Build(mReader, config.MetadataMode == .Positions));
+		return EndRead(Build(mReader, config), config);
 	}
+
+	/// @brief The errors of the last read with KdlReadConfig.CollectErrors, in order (empty
+	/// otherwise). Their messages belong to the document: valid until it is cleared or read again.
+	public Span<KdlParseError> Errors => mErrors;
 
 	/// Clears the document for a read and returns the reader's config, naming the document's copy of
 	/// the source name.
@@ -195,11 +205,11 @@ public class KdlDocument
 		return readerConfig;
 	}
 
-	Result<void, KdlParseError> EndRead(Result<void, KdlParseError> result)
+	Result<void, KdlParseError> EndRead(Result<void, KdlParseError> result, KdlReadConfig config)
 	{
 		// Nothing may keep viewing the caller's text or stream
 		mReader.Reset(StringView());
-		if (result case .Err)
+		if (result case .Err && !config.CollectErrors)
 		{
 			let sourceName = scope String(mSourceName);
 			Clear();
@@ -266,17 +276,34 @@ public class KdlDocument
 		return ReadBytes(bytes, config);
 	}
 
-	/// Turns the reader's events into records. With `positions` (Positions mode), also records each
-	/// node's and entry's source range.
-	Result<void, KdlParseError> Build(KdlReader reader, bool positions)
+	/// Turns the reader's events into records. In Positions mode, also records each node's and entry's
+	/// source range; with CollectErrors, records the errors and goes on.
+	Result<void, KdlParseError> Build(KdlReader reader, KdlReadConfig config)
 	{
+		bool positions = config.MetadataMode == .Positions;
 		mNodeStack.Clear();
 		if (positions)
 			mNodeRanges.Add(default);
 		uint32 current = 0;
 		while (true)
 		{
-			let event = Try!(reader.Next());
+			KdlEvent event;
+			switch (reader.Next())
+			{
+			case .Ok(let next):
+				event = next;
+			case .Err(let error):
+				if (!config.CollectErrors)
+					return .Err(error);
+				// Kept with the document: the message buffer is shared with the next error
+				var kept = error;
+				kept.mMessage = mStore.NewText(error.mMessage);
+				kept.mSource = mSourceName;
+				mErrors.Add(kept);
+				if (reader.IsStopped)
+					return .Err(mErrors[0]);
+				continue;
+			}
 			switch (event)
 			{
 			case .StartNode:
@@ -318,6 +345,8 @@ public class KdlDocument
 					mNodeRanges[current].mLength = (int32)(reader.EndOffset - reader.Offset);
 				current = mNodeStack.PopBack();
 			case .EndOfDocument:
+				if (!mErrors.IsEmpty)
+					return .Err(mErrors[0]);
 				return .Ok;
 			}
 		}

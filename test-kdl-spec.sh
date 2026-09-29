@@ -9,9 +9,10 @@
 # expected_kdl/<name> byte for byte. A crash (exit other than 0 or 1) or a timeout
 # is always a failure. Details of each failure go to test-kdl-spec.log.
 #
-# Every case runs three times: through a KdlDocument (the default), straight from the reader's events
-# (KdlTester -events), and through a document read from a Stream with a 16-byte buffer (KdlTester
-# -stream 16). MODES="document" (or events, stream) runs some.
+# Every case runs four times: through a KdlDocument (the default), straight from the reader's events
+# (KdlTester -events), through a document read from a Stream with a 16-byte buffer (KdlTester
+# -stream 16), and with CollectErrors (KdlTester -collect: the first error must be the golden one).
+# MODES="document" (or events, stream, collect) runs some.
 #
 # Fetch the suite first with tests/fetch-spec.sh.
 
@@ -41,11 +42,14 @@ trap 'rm -rf "$tmpdir"' EXIT
 } > "$LOGFILE"
 
 failed=0
-for mode in ${MODES:-document events stream}; do
+for mode in ${MODES:-document events stream collect}; do
 flag=""
 [ "$mode" = events ] && flag="-events"
 # A 16-byte buffer: refills land inside tokens, strings, escapes, CRLFs and multi-byte characters
 [ "$mode" = stream ] && flag="-stream 16"
+# CollectErrors: valid cases are unchanged; a failing case's first error is the golden one, and the
+# recovery after it must end (the timeout) without crashing
+[ "$mode" = collect ] && flag="-collect"
 valid_pass=0
 valid_total=0
 fail_pass=0
@@ -73,7 +77,7 @@ for input in "$SUITE"/input/*.kdl; do
 			if [ -n "${UPDATE_GOLDEN:-}" ]; then
 				cp "$tmpdir/err" "$golden"
 				fail_pass=$((fail_pass + 1))
-			elif cmp -s "$tmpdir/err" "$golden"; then
+			elif head -1 "$tmpdir/err" | cmp -s - "$golden"; then
 				fail_pass=$((fail_pass + 1))
 			else
 				{
