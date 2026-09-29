@@ -30,6 +30,14 @@ public struct KdlEntry
 	public StringView Annotation => Record.mAnnotation;
 	/// @brief The value.
 	public KdlValue Value => Record.mValue;
+
+	/// @brief Where the entry came from, when the document was read with KdlMetadataMode.Positions.
+	/// @param range Receives the range: from the key (or annotation) to the end of the value.
+	/// @return Whether the entry has one.
+	public bool TryGetSourceRange(out KdlSourceRange range)
+	{
+		return mDocument.TryGetRange(mDocument.mEntryRanges, mIndex, out range);
+	}
 }
 
 /// A node's arguments and properties, in order.

@@ -74,6 +74,10 @@ public class KdlReader
 		public bool mChildrenSlashdashed;
 		/// Offset of its open children block's `{`, for the unclosed-block error.
 		public int32 mBraceOffset;
+		/// Where the node starts (its `/-`, annotation or name).
+		public int32 mStart;
+		/// Its arguments and properties so far, slashdashed ones included (MaxEntriesPerNode).
+		public int32 mEntryCount;
 	}
 
 	StringView mInput;
@@ -99,6 +103,12 @@ public class KdlReader
 	KdlValue mValue;
 	int mDepth;
 	int mEventOffset;
+	int mEventEnd;
+	/// Just past the last name, value or `}` read (slashdashed ones included).
+	int mLastTokenEnd;
+
+	KdlReadConfig mConfig;
+	int mNodeCount;
 
 	/// @brief Create a reader with no input; call Reset before reading.
 	public this()
@@ -107,6 +117,7 @@ public class KdlReader
 		mNameBuffer = new .();
 		mAnnotationBuffer = new .();
 		mValueBuffer = new .();
+		mConfig = .();
 	}
 
 	/// @brief Create a reader over `input`, which must outlive the reader's use of it.
@@ -116,10 +127,32 @@ public class KdlReader
 		Reset(input);
 	}
 
-	/// @brief Start reading `input` from the beginning, reusing the reader's buffers.
+	/// @brief Create a reader over `input` with limits and a source name.
+	/// @param input The document text (UTF-8; a leading BOM is skipped).
+	/// @param config The limits and source name (MetadataMode is ignored).
+	public this(StringView input, KdlReadConfig config) : this()
+	{
+		Reset(input, config);
+	}
+
+	/// @brief Start reading `input` from the beginning with the default config, reusing the reader's
+	/// buffers.
 	/// @param input The document text (UTF-8; a leading BOM is skipped).
 	public void Reset(StringView input)
 	{
+		Reset(input, .());
+	}
+
+	/// @brief Start reading `input` from the beginning, reusing the reader's buffers.
+	/// @param input The document text (UTF-8; a leading BOM is skipped).
+	/// @param config The limits and source name (MetadataMode is ignored). The source name is only
+	/// viewed: it must outlive the read.
+	public void Reset(StringView input, KdlReadConfig config)
+	{
+		mConfig = config;
+		mNodeCount = 0;
+		mEventEnd = 0;
+		mLastTokenEnd = 0;
 		mInput = input;
 		mData = input.Ptr;
 		mPos = 0;
@@ -146,9 +179,13 @@ public class KdlReader
 	public KdlValue Value => mValue;
 	/// @brief The depth of the node the event belongs to: 0 for top-level nodes.
 	public int Depth => mDepth;
-	/// @brief Byte offset into the input where the event's construct starts (the node or entry,
-	/// including its annotation; for EndNode, its terminator).
+	/// @brief Byte offset into the input where the event's construct starts: the node (StartNode,
+	/// EndNode) or entry, including its annotation.
 	public int Offset => mEventOffset;
+	/// @brief Byte offset just past the event's construct: StartNode, the node's name; Argument and
+	/// Property, the value; EndNode, the node's last token (its name, last entry or children block's
+	/// `}`), so Offset ..< EndOffset spans the whole node. EndOfDocument: the input's length.
+	public int EndOffset => mEventEnd;
 
 	/// @brief Read up to the next event.
 	/// @return The event, or the first error in the document.
@@ -170,12 +207,16 @@ public class KdlReader
 	{
 		if (mState == .Start)
 		{
+			if (mConfig.MaxInputBytes > 0 && mEnd > mConfig.MaxInputBytes)
+				return .Err(Fail(.ResourceLimitExceeded, scope $"The input ({mEnd} bytes) exceeds MaxInputBytes ({mConfig.MaxInputBytes})", 0, 0));
 			switch (KdlChar.ValidateDocument(mInput, let start))
 			{
 			case .Ok:
 				mPos = start;
 			case .Err(let error):
 				mError = error;
+				if (!mConfig.SourceName.IsEmpty)
+					mError.SetSource(mConfig.SourceName);
 				return .Err(.());
 			}
 			mState = .Nodes;
@@ -193,6 +234,7 @@ public class KdlReader
 					mState = .End;
 					mDepth = 0;
 					mEventOffset = mPos;
+					mEventEnd = mPos;
 					return .Ok(.EndOfDocument);
 				}
 				char8 b = mData[mPos];
@@ -201,6 +243,7 @@ public class KdlReader
 					if (mFrames.Count == 0)
 						return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
 					mPos++;
+					mLastTokenEnd = mPos;
 					ref Frame frame = ref mFrames.Back;
 					if (frame.mChildrenSlashdashed)
 					{
@@ -223,8 +266,13 @@ public class KdlReader
 					slashdash = true;
 				}
 				Try!(ReadNodeHead());
+				if (mConfig.MaxDepth > 0 && mFrames.Count >= mConfig.MaxDepth)
+					return .Err(Fail(.ResourceLimitExceeded, scope $"Nodes are nested deeper than MaxDepth ({mConfig.MaxDepth})", nodeStart));
+				if (mConfig.MaxNodes > 0 && ++mNodeCount > mConfig.MaxNodes)
+					return .Err(Fail(.ResourceLimitExceeded, scope $"The document has more nodes than MaxNodes ({mConfig.MaxNodes})", nodeStart));
 				Frame opened = default;
 				opened.mSlashdashed = slashdash;
+				opened.mStart = (int32)nodeStart;
 				mFrames.Add(opened);
 				if (slashdash)
 					mSuppressed++;
@@ -234,6 +282,7 @@ public class KdlReader
 				{
 					mDepth = mFrames.Count - 1;
 					mEventOffset = nodeStart;
+					mEventEnd = mLastTokenEnd;
 					return .Ok(.StartNode);
 				}
 
@@ -249,7 +298,6 @@ public class KdlReader
 					continue;
 				}
 				char8 c = mData[mPos];
-				int terminatorStart = mPos;
 				int newline = KdlChar.NewlineLength(mData, mPos, mEnd);
 				bool terminated = true;
 				if (newline > 0)
@@ -268,7 +316,6 @@ public class KdlReader
 					terminated = false;
 				if (terminated)
 				{
-					mEventOffset = terminatorStart;
 					if (EndNode())
 						return .Ok(.EndNode);
 					continue;
@@ -291,6 +338,7 @@ public class KdlReader
 						return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
 					if (!CanStartValue(mPos) && mData[mPos] != '(')
 						return .Err(Unexpected("an argument, property or children block after `/-`"));
+					Try!(CountEntry(ref current));
 					mSuppressed++;
 					Try!(ReadEntry());
 					mSuppressed--;
@@ -311,12 +359,14 @@ public class KdlReader
 					return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children block", mPos));
 				if (!space)
 					return .Err(Fail(.MissingSpace, "Expected whitespace before this argument or property", mPos));
+				Try!(CountEntry(ref current));
 				int entryStart = mPos;
 				let event = Try!(ReadEntry());
 				if (mSuppressed == 0)
 				{
 					mDepth = mFrames.Count - 1;
 					mEventOffset = entryStart;
+					mEventEnd = mLastTokenEnd;
 					return .Ok(event);
 				}
 
@@ -334,6 +384,8 @@ public class KdlReader
 	{
 		Frame frame = mFrames.PopBack();
 		mState = .Nodes;
+		mEventOffset = frame.mStart;
+		mEventEnd = mLastTokenEnd;
 		if (frame.mSlashdashed)
 		{
 			mSuppressed--;
@@ -343,6 +395,15 @@ public class KdlReader
 			return false;
 		mDepth = mFrames.Count;
 		return true;
+	}
+
+	/// Counts an entry of the current node against MaxEntriesPerNode.
+	[Inline]
+	Result<void, KdlFailure> CountEntry(ref Frame frame)
+	{
+		if (mConfig.MaxEntriesPerNode > 0 && ++frame.mEntryCount > mConfig.MaxEntriesPerNode)
+			return .Err(Fail(.ResourceLimitExceeded, scope $"The node has more arguments and properties than MaxEntriesPerNode ({mConfig.MaxEntriesPerNode})", mPos));
+		return .Ok;
 	}
 
 	/// Consumes `/-` and the line-space after it, which must lead to something to comment out.
@@ -373,6 +434,7 @@ public class KdlReader
 		KdlValue name = Try!(ReadValue(mNameBuffer));
 		if (!name.TryGetString(out mName))
 			return .Err(Fail(.ExpectedString, "A node name must be a string; quote it", nameStart, mPos - nameStart));
+		mLastTokenEnd = mPos;
 		return .Ok;
 	}
 
@@ -428,10 +490,12 @@ public class KdlReader
 				Try!(SkipNodeSpace());
 			}
 			mValue = Try!(ReadValue(mValueBuffer));
+			mLastTokenEnd = mPos;
 			return .Ok(.Property);
 		}
 		mValue = value;
 		mPendingSpace = space;
+		mLastTokenEnd = tokenEnd;
 		return .Ok(.Argument);
 	}
 
@@ -615,6 +679,8 @@ public class KdlReader
 	KdlFailure Fail(KdlErrorKind kind, StringView message, int offset, int length = 1)
 	{
 		mError = KdlParseError.At(kind, message, mInput, offset, length);
+		if (!mConfig.SourceName.IsEmpty)
+			mError.SetSource(mConfig.SourceName);
 		return .();
 	}
 

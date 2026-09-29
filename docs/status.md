@@ -6,12 +6,12 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 18/18 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 18/18 pass |
+| `beefbuild -test` (Debug checks) | 22/22 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 22/22 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In both modes (document, events): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 18/18 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 22/22 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 14 implementations on 6 inputs; results in `bench/compare/results.md` |
 
@@ -40,7 +40,8 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | Canonical formatting (`KdlCanonical.Format`) | Done from events; byte-exact on the whole suite |
 | Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups, canonical `Write`; byte-exact on the whole suite. No mutation beyond names and annotations yet (phase 5), no property hash index yet |
 | `KdlTester` | Prints the canonical form of a file or stdin through a document, or with `-events` straight from the reader; exit 1 on invalid input |
-| Positions, limits, streams, PreserveStyle, mutation, `[KdlObject]` | Not started: see `docs/plan.md` §6 |
+| Read config, limits, positions | `KdlReadConfig`: source name, MaxDepth (256), MaxInputBytes, MaxNodes, MaxEntriesPerNode, MaxStringBytes (enforced by the reader, so for events too); `KdlMetadataMode.Positions` with `TryGetSourceRange` on nodes and entries |
+| Streams, collect-errors, golden errors, PreserveStyle, mutation, `[KdlObject]` | Not started: see `docs/plan.md` §6 |
 
 ## Open items
 
@@ -49,7 +50,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 | ID | Item | Size |
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
-| P4 | Phase 4: golden error messages per `_fail` case, collect-errors mode, positions, limits (depth, nodes, entries, string bytes), streams | M |
+| P4 | Rest of phase 4: golden error messages per `_fail` case, collect-errors mode (open question 3), streams | M |
 | P5 | Phase 5: PreserveStyle round trip and mutation API | L |
 | P6 | Phase 6: `[KdlObject]` typed mapping | M |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |

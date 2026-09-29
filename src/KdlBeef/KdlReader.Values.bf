@@ -10,6 +10,15 @@ extension KdlReader
 	/// the input; otherwise the value views the input.
 	Result<KdlValue, KdlFailure> ReadValue(String buffer)
 	{
+		int start = mPos;
+		KdlValue value = Try!(ReadValueToken(buffer));
+		if (mConfig.MaxStringBytes > 0 && value case .String(let s) && s.Length > mConfig.MaxStringBytes)
+			return .Err(Fail(.ResourceLimitExceeded, scope $"A string of {s.Length} bytes exceeds MaxStringBytes ({mConfig.MaxStringBytes})", start, mPos - start));
+		return value;
+	}
+
+	Result<KdlValue, KdlFailure> ReadValueToken(String buffer)
+	{
 		if (mPos >= mEnd)
 			return .Err(Unexpected("a value"));
 		char8 b = mData[mPos];

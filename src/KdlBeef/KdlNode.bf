@@ -127,6 +127,15 @@ public struct KdlNode : IEquatable<KdlNode>
 	/// @brief The number of child nodes.
 	public int ChildCount => Record.mChildCount;
 
+	/// @brief Where the node came from, when the document was read with KdlMetadataMode.Positions.
+	/// @param range Receives the range: from the node's annotation (or `/-`) to its last token.
+	/// @return Whether the node has one (not without Positions, nor for nodes added in code).
+	public bool TryGetSourceRange(out KdlSourceRange range)
+	{
+		Runtime.Assert(IsValid, "KdlNode: the handle is invalid");
+		return mDocument.TryGetRange(mDocument.mNodeRanges, mId, out range);
+	}
+
 	/// @brief The node's depth: 0 for a top-level node. Walks up the tree.
 	public int Depth
 	{

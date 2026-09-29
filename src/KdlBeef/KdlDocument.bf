@@ -51,6 +51,53 @@ internal struct KdlEntryRecord
 	public KdlEntryFlags mFlags;
 }
 
+/// A source range without the source name (the document holds it). Line 0: no position.
+internal struct KdlRangeRecord
+{
+	public int32 mLine;
+	public int32 mColumn;
+	public int32 mOffset;
+	public int32 mLength;
+}
+
+/// Turns increasing byte offsets into lines and columns in one forward pass over the input.
+internal struct KdlLineCounter
+{
+	StringView mInput;
+	int mPos;
+	int mLine;
+	int mColumn;
+
+	public this(StringView input)
+	{
+		mInput = input;
+		bool bom = input.Length >= 3 && (uint8)input[0] == 0xEF && (uint8)input[1] == 0xBB && (uint8)input[2] == 0xBF;
+		mPos = bom ? 3 : 0;
+		mLine = 1;
+		mColumn = 1;
+	}
+
+	/// The line and column of `offset`, which must not be before the previous one asked for.
+	public KdlRangeRecord At(int offset, int length) mut
+	{
+		char8* data = mInput.Ptr;
+		while (mPos < offset)
+		{
+			int newline = KdlChar.NewlineLength(data, mPos, mInput.Length);
+			if (newline > 0)
+			{
+				mPos += newline;
+				mLine++;
+				mColumn = 1;
+				continue;
+			}
+			mPos += Math.Max(KdlChar.Utf8SequenceLength(data[mPos]), 1);
+			mColumn++;
+		}
+		return .() { mLine = (int32)mLine, mColumn = (int32)mColumn, mOffset = (int32)offset, mLength = (int32)length };
+	}
+}
+
 /// A KDL document: the top-level nodes and everything under them.
 ///
 /// The document owns all of its text and nodes. Nodes are handed out as `KdlNode` handles (the
@@ -66,9 +113,18 @@ internal struct KdlEntryRecord
 /// ```
 public class KdlDocument
 {
+	/// @brief This document's read configuration, used by the Read/ReadBytes/ReadFile overloads that take
+	/// no config: `doc.ReadConfig.MetadataMode = .Positions;`.
+	public KdlReadConfig ReadConfig = .();
+
 	internal KdlDocumentStore mStore ~ delete _;
 	internal List<KdlNodeRecord> mNodes ~ delete _;
 	internal List<KdlEntryRecord> mEntries ~ delete _;
+	/// Positions mode: the source range of each node (by ID) and entry (by index); empty otherwise.
+	internal List<KdlRangeRecord> mNodeRanges ~ delete _;
+	internal List<KdlRangeRecord> mEntryRanges ~ delete _;
+	/// The source name of the last read (for errors and ranges).
+	internal String mSourceName ~ delete _;
 	/// Changes on every Clear and Read, so handles from before can tell they are stale.
 	internal uint32 mGeneration;
 	/// The reader behind Read, kept for its buffers.
@@ -85,6 +141,9 @@ public class KdlDocument
 		mEntries = new .();
 		mNodeStack = new .();
 		mPropertyOrder = new .();
+		mNodeRanges = new .();
+		mEntryRanges = new .();
+		mSourceName = new .();
 		mNodes.Add(default);
 		mGeneration = 1;
 	}
@@ -92,12 +151,19 @@ public class KdlDocument
 	/// @brief The top-level nodes, in order.
 	public KdlNodeList Nodes => .(this, 0);
 
+	/// @brief The name of the source last read (KdlReadConfig.SourceName, or ReadFile's path); empty
+	/// if unnamed.
+	public StringView SourceName => mSourceName;
+
 	/// @brief Remove every node.
 	public void Clear()
 	{
 		mStore.Reset();
 		mNodes.Clear();
 		mEntries.Clear();
+		mNodeRanges.Clear();
+		mEntryRanges.Clear();
+		mSourceName.Clear();
 		mNodes.Add(default);
 		mGeneration++;
 	}
@@ -112,55 +178,92 @@ public class KdlDocument
 
 	// Reading
 
-	/// @brief Replace the document's content with the KDL document in `text`.
+	/// @brief Replace the document's content with the KDL document in `text`, using ReadConfig.
 	/// @param text The document (UTF-8; a leading BOM is skipped).
 	/// @return .Ok, or the first error; the document is then empty.
 	public Result<void, KdlParseError> Read(StringView text)
 	{
+		return Read(text, ReadConfig);
+	}
+
+	/// @brief Replace the document's content with the KDL document in `text`.
+	/// @param text The document (UTF-8; a leading BOM is skipped).
+	/// @param config Metadata, source name and limits.
+	/// @return .Ok, or the first error; the document is then empty.
+	public Result<void, KdlParseError> Read(StringView text, KdlReadConfig config)
+	{
 		Clear();
+		mSourceName.Set(config.SourceName);
+		var readerConfig = config;
+		readerConfig.SourceName = mSourceName;
 		if (mReader == null)
 			mReader = new KdlReader();
-		mReader.Reset(text);
-		let result = Build(mReader);
+		mReader.Reset(text, readerConfig);
+		let result = Build(mReader, config.MetadataMode == .Positions ? text : default);
 		// Nothing may keep viewing the caller's text
 		mReader.Reset(default);
 		if (result case .Err)
+		{
 			Clear();
+			mSourceName.Set(config.SourceName);
+		}
 		return result;
 	}
 
-	/// @brief Replace the document's content with the KDL document in `bytes`.
+	/// @brief Replace the document's content with the KDL document in `bytes`, using ReadConfig.
 	/// @param bytes The document (UTF-8; a leading BOM is skipped).
 	/// @return .Ok, or the first error; the document is then empty.
 	public Result<void, KdlParseError> ReadBytes(Span<uint8> bytes)
 	{
-		return Read(StringView((char8*)bytes.Ptr, bytes.Length));
+		return Read(StringView((char8*)bytes.Ptr, bytes.Length), ReadConfig);
 	}
 
-	/// @brief Replace the document's content with the KDL document in a file.
-	/// @param path The file's path; errors name it as their source.
+	/// @brief Replace the document's content with the KDL document in `bytes`.
+	/// @param bytes The document (UTF-8; a leading BOM is skipped).
+	/// @param config Metadata, source name and limits.
+	/// @return .Ok, or the first error; the document is then empty.
+	public Result<void, KdlParseError> ReadBytes(Span<uint8> bytes, KdlReadConfig config)
+	{
+		return Read(StringView((char8*)bytes.Ptr, bytes.Length), config);
+	}
+
+	/// @brief Replace the document's content with the KDL document in a file, using ReadConfig.
+	/// @param path The file's path; errors and source ranges name it unless ReadConfig.SourceName is set.
 	/// @return .Ok, or the first error (IoError if the file cannot be read); the document is then empty.
 	public Result<void, KdlParseError> ReadFile(StringView path)
 	{
+		return ReadFile(path, ReadConfig);
+	}
+
+	/// @brief Replace the document's content with the KDL document in a file.
+	/// @param path The file's path; errors and source ranges name it unless config.SourceName is set.
+	/// @param config Metadata, source name and limits.
+	/// @return .Ok, or the first error (IoError if the file cannot be read); the document is then empty.
+	public Result<void, KdlParseError> ReadFile(StringView path, KdlReadConfig config)
+	{
+		var config;
+		if (config.SourceName.IsEmpty)
+			config.SourceName = path;
 		let bytes = scope List<uint8>();
 		if (File.ReadAll(path, bytes) case .Err)
 		{
 			Clear();
 			var error = KdlParseError(.IoError, "Cannot read the file", 0, 0, 0, 0);
-			error.SetSource(path);
+			error.SetSource(config.SourceName);
 			return .Err(error);
 		}
-		if (ReadBytes(bytes) case .Err(var error))
-		{
-			error.SetSource(path);
-			return .Err(error);
-		}
-		return .Ok;
+		return ReadBytes(bytes, config);
 	}
 
-	Result<void, KdlParseError> Build(KdlReader reader)
+	/// Turns the reader's events into records. With `positionsInput` (Positions mode), also records
+	/// each node's and entry's source range.
+	Result<void, KdlParseError> Build(KdlReader reader, StringView positionsInput)
 	{
 		mNodeStack.Clear();
+		bool positions = positionsInput.Ptr != null;
+		var lines = KdlLineCounter(positionsInput);
+		if (positions)
+			mNodeRanges.Add(default);
 		uint32 current = 0;
 		while (true)
 		{
@@ -172,7 +275,11 @@ public class KdlDocument
 				LinkLastChild(current, id);
 				mNodeStack.Add(current);
 				current = id;
+				if (positions)
+					mNodeRanges.Add(lines.At(reader.Offset, 0));
 			case .Argument, .Property:
+				if (positions)
+					mEntryRanges.Add(lines.At(reader.Offset, reader.EndOffset - reader.Offset));
 				// A node's entries all come before its children, so they are appended contiguously
 				ref KdlNodeRecord node = ref mNodes[current];
 				if (node.mEntryCount == 0)
@@ -198,6 +305,8 @@ public class KdlDocument
 					entry.mAnnotation = default;
 				entry.mValue = mStore.OwnValue(reader.Value, false);
 			case .EndNode:
+				if (positions)
+					mNodeRanges[current].mLength = (int32)(reader.EndOffset - reader.Offset);
 				current = mNodeStack.PopBack();
 			case .EndOfDocument:
 				return .Ok;
@@ -206,6 +315,19 @@ public class KdlDocument
 	}
 
 	// Node table
+
+	/// The recorded source range, if the document was read with positions and `range` has one.
+	internal bool TryGetRange(List<KdlRangeRecord> ranges, int index, out KdlSourceRange range)
+	{
+		if (index < ranges.Count && ranges[index].mLine > 0)
+		{
+			let r = ranges[index];
+			range = .(r.mLine, r.mColumn, r.mOffset, r.mLength, mSourceName);
+			return true;
+		}
+		range = default;
+		return false;
+	}
 
 	internal bool IsLive(uint32 id)
 	{

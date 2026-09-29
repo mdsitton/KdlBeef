@@ -20,7 +20,9 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 | File (`src/KdlBeef/`) | Responsibility |
 |---|---|
-| `KdlDocument.bf` | `KdlDocument`: the node and entry tables (`KdlNodeRecord`, `KdlEntryRecord`), `Read`/`ReadBytes`/`ReadFile` (the builder over `KdlReader`), `Clear`, `GetNode`, the canonical `Write` |
+| `KdlDocument.bf` | `KdlDocument`: the node and entry tables (`KdlNodeRecord`, `KdlEntryRecord`, `KdlRangeRecord`), `ReadConfig`, `Read`/`ReadBytes`/`ReadFile` (the builder over `KdlReader`, `KdlLineCounter` for positions), `Clear`, `GetNode`, the canonical `Write` |
+| `KdlReadConfig.bf` | `KdlMetadataMode` and `KdlReadConfig` (source name, limits) |
+| `KdlSourceRange.bf` | `KdlSourceRange`: a node's or entry's source line, column, offset and length |
 | `KdlNode.bf` | `KdlNodeId`, the `KdlNode` handle (name, annotation, navigation, argument and property lookups), `KdlNodeList` (children or top-level nodes) |
 | `KdlEntry.bf` | `KdlEntry` (an argument or property view) and `KdlEntryList` |
 | `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
@@ -146,6 +148,22 @@ Every string, key, annotation, float lexeme and big integer is copied into the d
 (`KdlDocumentStore`), a `BumpAllocator` whose pools are kept across `Clear` and `Read` (TomlBeef
 measured the page faults of fresh pools at up to 40% of parse time). A plain read drops integer
 lexemes (the canonical form writes integers in decimal); PreserveStyle will keep them.
+
+### Configuration, limits and positions
+
+`KdlReadConfig` (TomlBeef's `TomlReadConfig` shape) carries the metadata mode, the source name and
+the limits. The reader enforces the limits itself, so event users get them too: `MaxInputBytes`
+before validation, `MaxDepth` (256 by default) and `MaxNodes` when a node opens, `MaxEntriesPerNode`
+per entry, `MaxStringBytes` on every decoded string (names, keys, annotations, values). Slashdashed
+content counts: it is parsed like the rest. Errors carry the source name (`source:line:column:
+message`); `ReadFile` uses the path unless one is set.
+
+The reader reports each event's range: `Offset` and `EndOffset` (a node's range, at `EndNode`,
+runs from its `/-` or annotation to its last token, tracked as `mLastTokenEnd`). With
+`KdlMetadataMode.Positions`, the builder turns them into line and column (`KdlLineCounter`: one
+forward pass over the input, since events come in source order) and keeps a `KdlRangeRecord` per node
+ID and per entry index, beside the records; plain reads keep none. `TryGetSourceRange` on nodes and
+entries returns them as `KdlSourceRange`s naming the document's copy of the source name.
 
 ### Reading and writing
 
