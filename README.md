@@ -4,8 +4,9 @@ A [KDL 2.0](https://kdl.dev) parser and writer for the [Beef programming languag
 built for UI markup: fast, spec-compliant, with located errors, format preservation and compile-time
 typed mapping. The sibling of [TomlBeef](../TomlBeef).
 
-**Status: planning.** The repository holds the project skeleton, the research and the benchmark of
-existing KDL implementations; the parser is not written yet. Start with [docs/plan.md](docs/plan.md).
+**Status: early.** A complete KDL 2.0 pull reader (`KdlReader`) and canonical formatter
+(`KdlCanonical`) pass the whole official test suite; the document model and the rest are next. See
+[docs/status.md](docs/status.md) and [docs/plan.md](docs/plan.md).
 
 ## Layout
 

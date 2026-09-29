@@ -30,6 +30,16 @@ what was learned, the design to build and the phases to build it in. Read with i
 
 `beefbuild` and `beefbuild -test` pass (1/1). Nothing parses KDL yet.
 
+**Update (phase 1 done, 2026-09-29):** `KdlReader`, `KdlValue`, `KdlChar`, `KdlParseError` and
+`KdlCanonical` exist; the suite passes in full through the reader (243/243 byte-exact, 95/95
+rejected), which is more than phase 1 asked for. What was built and why is in `architecture.md`, the
+current baseline in `status.md`. Two plan points were settled on the way: validation (UTF-8 and banned
+code points) is one up-front pass rather than folded into the tokenizer (§4.2; revisit in phase 3),
+and the reader works on a contiguous buffer with plain offsets (streams, phase 4, will need either a
+generic cursor as in TomlBeef or copying event payloads when refilling). The canonical writer also
+needs big integers converted to decimal (`hex_int` expects `0xABCDEF0123456789abcdef` →
+`207698809136909011942886895`); `KdlCanonical.AppendIntegerLexeme` does it.
+
 ## 2. What the benchmark says
 
 Every KDL v2 implementation whose language has a toolchain here was built from a pinned clone and
@@ -120,14 +130,36 @@ document.
 - `KdlDocument` owns everything through a store (TomlBeef's `TomlDocumentStore.bf`: a
   `BumpAllocator` whose pools are recycled across reads). Strings are arena bytes viewed as
   `StringView` (TomlBeef's `NewKey`), not `String` objects with destructors.
-- `KdlNode` (class, in the store): name, optional type annotation, **one ordered list of entries**,
-  optional children (an ordered list of nodes). Parent pointer optional (the UI framework will want
-  it; decide in phase 2).
+- **Nodes are IDs, not objects** (decided 2026-09-29, after Sizzle's `EntityGraph`,
+  `~/development/PortalEmulator/Sizzle/src/Entities/EntityGraph.bf`). Each node is a `KdlNodeId`
+  (`uint32` index, 0 invalid) into the document's node table, which holds parallel arrays: name,
+  annotation, entry range, and the hierarchy as parent / first child / last child / next sibling /
+  previous sibling (20 bytes of links per node; no per-node children `List`). Building a node is a
+  few array writes (the reader's frame stack knows the parent and previous sibling); moving or
+  inserting is an O(1) relink; a stale ID is detectable, where a stale pointer would crash.
+  - The public face is `KdlNode`, a 16-byte handle struct (document + ID) whose **properties** read
+    and write through to the document (`node.Name`, `node.Parent`, `node.Children`,
+    `node.TryGetProperty(…)`, `node.Name = "x"`), so user code reads like a pointer-based tree.
+    Not Sizzle's packed graph-ID-plus-static-registry lookup: a library should not need a
+    process-wide document table.
+  - Unlike `EntityGraph`: **no stored depth** (it makes every reparent walk the subtree; compute it
+    by walking up), and **no slot reuse** before `Clear()` (Sizzle's `AllocateSlot` reuses the first
+    free slot, so an old ID can silently alias a new entity; add a generation to the ID if reuse is
+    ever needed).
+  - Child by index is O(i) through the sibling links (iteration, the common case, is not); keep a
+    child count per node.
+  - IDs are per document and per parse: hot-reload matching across parses uses the markup's own
+    identity (an `id=` property or a node path), as Sizzle separates `PersistentId` from `EntityID`.
+  - The metadata sidecars (Positions, PreserveStyle, §4.7) are keyed by the same ID.
+- Entries: one document-wide array; each node holds a start and count. The reader produces them in
+  document order, so a parse fills it contiguously. Adding an entry to an earlier node moves that
+  node's range to the end (leaving a hole reclaimed on `Clear`/rebuild); settle the details in
+  phase 2.
 - `KdlEntry` (struct): optional key (a property) or none (an argument), optional type annotation,
   value. Arguments keep their order; properties keep source order and duplicates; property lookup
   returns the last. Canonical writing dedupes (last wins) and sorts.
-- **Property index:** a node with more than 8 properties gets a hash index built lazily, exactly
-  TomlBeef's `TomlEntryMap.bf` (ordered slots, linear scan up to 8, open-addressing index with a
+- **Property index:** a node with more than 8 properties gets a hash index built lazily (over its
+  entry range), as TomlBeef's `TomlEntryMap.bf` (ordered slots, linear scan up to 8, open-addressing index with a
   power-of-two mask and stored hashes past that). No existing implementation indexes; UI nodes carry
   5–20 attributes and are queried constantly. Children-by-name lookup: iterate, with an optional
   per-node name index later if profiles ask for it.
@@ -164,8 +196,27 @@ message and position per `_fail` case (kdl4j keeps 83 such snapshots).
 
 ### 4.6 Writers
 
-- Canonical: exactly the suite's format (`spec-reference.md` §12) and the default output.
+- Canonical: exactly the suite's format (`spec-reference.md` §12): numbers in decimal, strings bare
+  or quoted. Used by the suite, `KdlCanonical` and anyone who asks for it.
 - Preserving: re-emits kept trivia and literal text (§4.7); regenerates only what changed.
+- **"As written" is TomlBeef's PreserveStyle model, not a writer flag** (author's preference,
+  2026-09-29: hex, octal and binary carry meaning — colors, masks, byte data — so numbers keep
+  their written form whenever it still round-trips). As in TomlBeef:
+  - `KdlReadConfig.MetadataMode` is `KdlMetadataMode { None, Positions, PreserveStyle }`
+    (TomlBeef's `TomlMetadataMode`). `None` and `Positions` write canonically; `PreserveStyle` makes
+    the writer take the preserving path.
+  - Under PreserveStyle the sidecar keeps each value's original token and a format struct, as
+    TomlBeef's `TomlIntegerFormat` (base, uppercase hex digits, underscore grouping, group size,
+    minimum digits) and float format (decimal/scientific, exponent spelling). A clean value reuses
+    its token exactly (`0xFF_00_ff`); a dirty one (TomlBeef's `TomlDirtyFlags.Value`) is regenerated
+    in its format, so `0xFF00FF` set to 255 writes `0xFF`, not `255`. A style API (as TomlBeef's
+    `TomlStyleApiTests`) sets formats on new or existing values (hex for a mask, say).
+  - Strings get the same treatment (raw/quoted/bare, multi-line) in the same sidecar.
+  - The reader's events always carry number lexemes (`KdlValue.Integer`/`Float` `text`, free:
+    views of the input), so the PreserveStyle builder captures formats from them. A plain (`None`)
+    document stores no integer lexemes; floats keep theirs (or a compact equivalent), because the
+    canonical form itself needs the written mantissa (`1.0`, `1E+10`) — decide the representation
+    in phase 2.
 - `KdlWriter` streaming emitter (phase 7): nodes, entries and children written in order without a
   document, with ckdl's options (indent, escape mode, identifier mode, float format).
 - Always KDL v2 output (gokdl2 defaults to v1; kdl-py prints `#inf` as `inf` and raw strings in v1
@@ -256,7 +307,8 @@ dependency on TomlBeef (the two libraries should stay independent).
 Each phase ends with Debug and Release tests, the leak check, the suite scripts on both binaries and
 the Windows tests (see `AGENTS.md`), committed.
 
-**Phase 1 — Tokenizer, event reader, suite runner.**
+**Phase 1 — Tokenizer, event reader, suite runner.** *Done: the suite passes in full through
+`KdlCanonical.Format`.*
 Port cursor, UTF-8 and char classes; write the tokenizer and `KdlReader`; `KdlTester` prints the
 canonical form from events (buffering one node's properties to sort them) and `test-kdl-spec.sh` runs
 the suite. Done when all 95 `_fail` cases fail and the valid cases' event streams are right (most
@@ -265,6 +317,9 @@ expected outputs match already).
 **Phase 2 — Document, canonical writer, full suite.**
 `KdlDocument`, store, nodes, entries (`KdlEntryList`), values, number lexemes; canonical writer; the
 test-suite script compares every valid case byte for byte. Done at 243/243 + 95/95, leak-free.
+The document builder consumes `KdlReader` events; the writer reuses `KdlCanonical`'s value, string
+and number formatting, and `KdlTester` switches to reading through the document (keeping the event
+path as a second mode, both checked by the suite script).
 
 **Phase 3 — Speed.**
 Join `bench/compare` (a `beef` harness like TomlBeef's, `KdlTester -bench`), then profile: SWAR scans,
@@ -311,8 +366,8 @@ Node 26, .NET 10, Python 3.14, GCC 16 + CMake, Zig 0.16 (downloaded by `fetch.sh
 ## 9. Open questions for the author
 
 1. **KDL v1 input**: needed at all? (Plan: no until asked; then an explicit converting front end.)
-2. **Parent pointers** on nodes: the UI framework will likely want them; they cost memory and make
-   moves slower. Decide in phase 2.
+2. ~~**Parent pointers** on nodes~~ — decided: node IDs with parent/sibling link arrays and a
+   `KdlNode` handle with properties (§4.3).
 3. **Collect-errors as the default** for the UI framework's hot reload, or opt-in?
 4. **Typed mapping defaults** (§4.10): scalar fields as properties, object fields as child nodes —
    agree before phase 6.
