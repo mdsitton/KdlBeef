@@ -6,10 +6,12 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 ## 1. Overview
 
-- A KDL 2.0.0 library for Beef, built for UI markup. Today it has a **pull reader** (`KdlReader`),
+- A KDL 2.0.0 library for Beef, built for UI markup. Today it has a **pull reader** (`KdlReader`,
+  over text in memory or a `Stream` read through a buffer),
   a **document** built on it (`KdlDocument` with `KdlNode` handles) with a canonical writer, and a
-  **canonical formatter** that needs no document (`KdlCanonical`); mutation, positions, format
-  preservation and typed mapping are later phases (`plan.md` §6).
+  **canonical formatter** that needs no document (`KdlCanonical`), plus mutation, positions and
+  resource limits; format preservation, collect-errors and typed mapping are later phases
+  (`plan.md` §6).
 - **Strict.** Invalid KDL is rejected with a located `KdlParseError` (line, column, byte offset,
   length). Slashdashed content is validated like everything else.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
@@ -20,17 +22,18 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 | File (`src/KdlBeef/`) | Responsibility |
 |---|---|
-| `KdlDocument.bf` | `KdlDocument`: the node and entry tables (`KdlNodeRecord`, `KdlEntryRecord`, `KdlRangeRecord`), `ReadConfig`, `Read`/`ReadBytes`/`ReadFile` (the builder over `KdlReader`, `KdlLineCounter` for positions), `Clear`, `GetNode`, the canonical `Write` |
+| `KdlDocument.bf` | `KdlDocument`: the node and entry tables (`KdlNodeRecord`, `KdlEntryRecord`, `KdlRangeRecord`), `ReadConfig`, `Read` (text or `Stream`)/`ReadBytes`/`ReadFile` (the builder over `KdlReader`), `Clear`, `GetNode`, the canonical `Write` |
 | `KdlReadConfig.bf` | `KdlMetadataMode` and `KdlReadConfig` (source name, limits) |
 | `KdlSourceRange.bf` | `KdlSourceRange`: a node's or entry's source line, column, offset and length |
 | `KdlNode.bf` | `KdlNodeId`, the `KdlNode` handle (name, annotation, navigation, argument and property lookups), `KdlNodeList` (children or top-level nodes) |
 | `KdlEntry.bf` | `KdlEntry` (an argument or property view) and `KdlEntryList` |
 | `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
-| `KdlReader.bf` | `KdlEvent`, and `KdlReader`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments and line continuations |
-| `KdlReader.Values.bf` | `extension KdlReader`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
+| `KdlReader.bf` | `KdlEvent`; `KdlReader` (public: dispatches to an in-memory or a stream core); `KdlReaderCore<TCursor>`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments, line continuations and the window helpers |
+| `KdlReader.Values.bf` | `extension KdlReaderCore<TCursor>`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
+| `KdlCursor.bf` | Internal: `IKdlCursor`, `KdlByteCursor` (in memory), `KdlBufferedStreamCursor` and `KdlStreamState` (streams), `KdlLineCounter` |
 | `KdlValue.bf` | `KdlValue`, the non-owning tagged union: `Null`, `Bool`, `Integer` (int64 + lexeme), `Float` (double + lexeme), `BigInteger` (lexeme), `String` |
 | `KdlCanonical.bf` | `KdlCanonical.Format` (input → canonical text through the reader) and the canonical value, string and number formatting the document writer will share |
-| `KdlChar.bf` | Internal: identifier, whitespace, newline and disallowed-code-point classes; UTF-8 decode/encode; `ValidateDocument`; `LineAndColumn` |
+| `KdlChar.bf` | Internal: identifier, whitespace, newline and disallowed-code-point classes; UTF-8 decode/encode; `FindInvalid` and `CompleteSequencesEnd` (validation of any range); `LineAndColumn` |
 | `KdlError.bf` | `KdlErrorKind` and `KdlParseError` (TomlBeef's error model: per-thread message buffer, no cleanup) |
 | `KdlVersion.bf` | `KdlVersion { V1, V2 }` (unused until KDL v1 input, if ever) |
 
@@ -39,17 +42,56 @@ Tests are in `src/KdlBeef/tests/`; the CLI is `KdlTester/src/Program.bf`; the ac
 
 ## 3. Reading
 
-### Validation first
+### Cursors and the window
 
-`KdlChar.ValidateDocument` runs once over the whole input before the first event: UTF-8 validity
-(overlongs, surrogates, > U+10FFFF) and the code points KDL bans everywhere (U+0000–0008,
-U+000E–001F, DEL, bidi controls, U+FEFF after position 0). Words of ASCII with no control
-characters other than tab, LF and CR are skipped 8 bytes at a time (`IsPlainAsciiWord`, exact
-per-byte tests), so indented text rarely leaves the word loop. Doing it up front means no scanner below has to check for banned or malformed
-sequences: comment, string and whitespace scans only look for their own stop characters, and
-multi-byte newlines and spaces are recognized by their UTF-8 bytes (`NewlineLength`,
-`UnicodeSpaceLength`; every non-ASCII one starts with 0xC2, 0xE1, 0xE2 or 0xE3). The plan considered
-folding this into the tokenizer; it stays a separate pass unless profiles say otherwise (phase 3).
+The reader is `KdlReaderCore<TCursor>`, specialized for two cursors (TomlBeef's `ITomlCursor`
+design, reshaped for a reader that scans raw bytes). The public `KdlReader` holds one core of each,
+creates the stream one on first use, and dispatches on which is reading.
+
+The core reads a **window**: `mData[offset]` for `mBase <= offset < mEnd`, with absolute offsets
+(`mData` is the buffer pointer minus `mBase`), so every offset the reader keeps (token starts, frame
+positions) stays valid when a stream moves its buffer. Every read that may reach the window's end
+goes through a helper that asks for more first: `Avail(pos)`, `AvailN`, `PeekAt`, `NewlineAt`,
+`SpaceAt` (up to 3 bytes: CRLF and multi-byte spaces never split), `DecodeAt` (4), `ScanQuoted`.
+They call `Grow`, which calls `IKdlCursor.Fill`:
+
+- `KdlByteCursor` (in-memory text): the window is the whole input and `Fill` is an inlined `false`,
+  so `Grow` folds to `return false` and `Avail(pos)` to `pos < mEnd`. `Grow` must stay `[Inline]`
+  and return a constant when `Fill` adds nothing, and hot loops advance a local position rather
+  than `mPos` (a store per byte): without these the in-memory path lost 25%. It is now within about
+  5% of the pre-cursor reader.
+- `KdlBufferedStreamCursor` (a `Stream`, from TomlBeef's `TomlBufferedStreamCursor`): a buffer
+  (64 KiB by default, `StreamBufferBytes`) holding the window from the current construct on
+  (`mRetain`: the node or entry being read; nothing between constructs). A refill counts the lines of
+  the bytes it drops, moves the rest to the front and reads more; a construct longer than the buffer
+  doubles it, up to `MaxTokenBytes`. When the buffer moves, the event's views (`mName`,
+  `mAnnotation`, `mValue`, and `mEntryValue`, ReadEntry's key-or-argument kept as a field for this)
+  are rebased onto it.
+
+### Validation
+
+`KdlChar.FindInvalid` checks a range for invalid UTF-8 (overlongs, surrogates, > U+10FFFF, bad or
+truncated sequences) and the code points KDL bans everywhere (U+0000–0008, U+000E–001F, DEL, bidi
+controls, U+FEFF after position 0). Words of ASCII with no control characters other than tab, LF and
+CR are skipped 8 bytes at a time (`IsPlainAsciiWord`, exact per-byte tests). The byte cursor checks
+the whole input in `Begin`, before the first event. The stream cursor checks each read as it
+arrives, up to the last complete sequence (`CompleteSequencesEnd`), and its window ends there: the
+reader never sees unchecked bytes. `Begin` fills and checks the first buffer, so a document that fits
+reports the same first error either way; further on, events may come before an encoding error, and
+when the reader runs into the end of what was delivered, the input's error (encoding, I/O, size)
+replaces whatever the reader would have reported (`mInputFailed`).
+
+Because everything the reader sees is valid, no scanner checks for banned or malformed sequences:
+comment, string and whitespace scans only look for their own stop characters, and multi-byte newlines
+and spaces are recognized by their UTF-8 bytes (every non-ASCII one starts with 0xC2, 0xE1, 0xE2 or
+0xE3).
+
+### Positions and error locations
+
+Errors and positions are located by the cursor (`Locate`), with a forward `KdlLineCounter`: the byte
+cursor counts from its last answer (or from the start for an earlier offset); the stream cursor
+counts as it drops bytes and cannot look back, so the reader locates a children block's `{` when it
+reads it (`LocatesOnlyForward`), for the unclosed-block error at the end of the input.
 
 ### The state machine
 
@@ -179,8 +221,9 @@ message`); `ReadFile` uses the path unless one is set.
 
 The reader reports each event's range: `Offset` and `EndOffset` (a node's range, at `EndNode`,
 runs from its `/-` or annotation to its last token, tracked as `mLastTokenEnd`). With
-`KdlMetadataMode.Positions`, the builder turns them into line and column (`KdlLineCounter`: one
-forward pass over the input, since events come in source order) and keeps a `KdlRangeRecord` per node
+`KdlMetadataMode.Positions`, the builder turns them into line and column through the reader's cursor
+(`KdlReader.Locate`: a forward count, since events come in source order; streams too) and keeps a
+`KdlRangeRecord` per node
 ID and per entry index, beside the records; plain reads keep none. `TryGetSourceRange` on nodes and
 entries returns them as `KdlSourceRange`s naming the document's copy of the source name.
 

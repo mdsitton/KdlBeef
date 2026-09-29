@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.IO;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -33,8 +34,11 @@ public enum KdlEvent : uint8
 /// `Annotation`, `Value`) are views into the input or into the reader's buffers, valid until the next
 /// call to `Next` or `Reset`.
 ///
-/// Everything is validated, including slashdashed (`/-`) nodes, entries and children blocks, which
-/// produce no events. The first error ends the read: `Next` returns it again on every later call.
+/// The input is text in memory, or a Stream read through a buffer (memory stays bounded by the
+/// buffer and the longest construct). Everything is validated, including slashdashed (`/-`) nodes,
+/// entries and children blocks, which produce no events. The first error ends the read: `Next`
+/// returns it again on every later call. An in-memory input is checked for encoding errors before the
+/// first event; a stream as it is read, so events may come before an encoding error further on.
 ///
 /// ```
 /// let reader = scope KdlReader(text);
@@ -50,74 +54,15 @@ public enum KdlEvent : uint8
 /// ```
 public class KdlReader
 {
-	enum State : uint8
-	{
-		/// Not validated yet.
-		Start,
-		/// Between nodes: before a node, a `}` or the end.
-		Nodes,
-		/// Inside a node, after its name or an entry: before an entry, a children block or a terminator.
-		Entries,
-		End,
-		Failed
-	}
-
-	/// An open node.
-	struct Frame
-	{
-		/// 0: arguments and properties may follow; 1: after a slashdashed children block (only children
-		/// blocks may follow); 2: after the children block (only slashdashed ones may follow).
-		public uint8 mPhase;
-		/// The node is slashdashed.
-		public bool mSlashdashed;
-		/// Its open children block is slashdashed.
-		public bool mChildrenSlashdashed;
-		/// Offset of its open children block's `{`, for the unclosed-block error.
-		public int32 mBraceOffset;
-		/// Where the node starts (its `/-`, annotation or name).
-		public int32 mStart;
-		/// Its arguments and properties so far, slashdashed ones included (MaxEntriesPerNode).
-		public int32 mEntryCount;
-	}
-
-	StringView mInput;
-	char8* mData;
-	int mPos;
-	int mEnd;
-	State mState;
-	/// The open nodes, innermost last. While between nodes, every one of them has its children block open.
-	List<Frame> mFrames ~ delete _;
-	/// How many slashdashed constructs enclose the position; events are reported only at 0.
-	int mSuppressed;
-	/// The property lookahead after the last argument consumed the whitespace before the next entry.
-	bool mPendingSpace;
-	KdlParseError mError;
-
-	String mNameBuffer ~ delete _;
-	String mAnnotationBuffer ~ delete _;
-	String mValueBuffer ~ delete _;
-
-	StringView mName;
-	StringView mAnnotation;
-	bool mHasAnnotation;
-	KdlValue mValue;
-	int mDepth;
-	int mEventOffset;
-	int mEventEnd;
-	/// Just past the last name, value or `}` read (slashdashed ones included).
-	int mLastTokenEnd;
-
-	KdlReadConfig mConfig;
-	int mNodeCount;
+	KdlReaderCore<KdlByteCursor> mBytes ~ delete _;
+	KdlReaderCore<KdlBufferedStreamCursor> mStream ~ delete _;
+	KdlStreamState mStreamState ~ delete _;
+	bool mStreaming;
 
 	/// @brief Create a reader with no input; call Reset before reading.
 	public this()
 	{
-		mFrames = new .();
-		mNameBuffer = new .();
-		mAnnotationBuffer = new .();
-		mValueBuffer = new .();
-		mConfig = .();
+		mBytes = new .();
 	}
 
 	/// @brief Create a reader over `input`, which must outlive the reader's use of it.
@@ -149,14 +94,176 @@ public class KdlReader
 	/// viewed: it must outlive the read.
 	public void Reset(StringView input, KdlReadConfig config)
 	{
+		mStreaming = false;
+		mBytes.Reset(KdlByteCursor(input, config), config);
+	}
+
+	/// @brief Start reading a stream with the default config.
+	/// @param stream The document (UTF-8; a leading BOM is skipped); read from its current position,
+	/// and must outlive the reader's use of it.
+	public void Reset(Stream stream)
+	{
+		Reset(stream, .());
+	}
+
+	/// @brief Start reading a stream through a buffer of `config.StreamBufferBytes` (see also
+	/// `config.MaxTokenBytes`).
+	/// @param stream The document (UTF-8; a leading BOM is skipped); read from its current position,
+	/// and must outlive the reader's use of it.
+	/// @param config The limits, buffer size and source name (MetadataMode is ignored).
+	public void Reset(Stream stream, KdlReadConfig config)
+	{
+		mStreaming = true;
+		if (mStream == null)
+		{
+			mStream = new .();
+			mStreamState = new .();
+		}
+		mStream.Reset(KdlBufferedStreamCursor(stream, mStreamState, config), config);
+	}
+
+	/// @brief StartNode: the node's name. Property: the key.
+	public StringView Name => mStreaming ? mStream.mName : mBytes.mName;
+	/// @brief Whether the node (StartNode) or value (Argument, Property) has a `(type)` annotation.
+	public bool HasAnnotation => mStreaming ? mStream.mHasAnnotation : mBytes.mHasAnnotation;
+	/// @brief The annotation's text when HasAnnotation (it may be empty: `("")`).
+	public StringView Annotation => mStreaming ? mStream.mAnnotation : mBytes.mAnnotation;
+	/// @brief Argument, Property: the value.
+	public KdlValue Value => mStreaming ? mStream.mValue : mBytes.mValue;
+	/// @brief The depth of the node the event belongs to: 0 for top-level nodes.
+	public int Depth => mStreaming ? mStream.mDepth : mBytes.mDepth;
+	/// @brief Byte offset into the input where the event's construct starts: the node (StartNode,
+	/// EndNode) or entry, including its annotation.
+	public int Offset => mStreaming ? mStream.mEventOffset : mBytes.mEventOffset;
+	/// @brief Byte offset just past the event's construct: StartNode, the node's name; Argument and
+	/// Property, the value; EndNode, the node's last token (its name, last entry or children block's
+	/// `}`), so Offset ..< EndOffset spans the whole node. EndOfDocument: the input's length.
+	public int EndOffset => mStreaming ? mStream.mEventEnd : mBytes.mEventEnd;
+
+	/// @brief Read up to the next event.
+	/// @return The event, or the first error in the document.
+	[Inline]
+	public Result<KdlEvent, KdlParseError> Next()
+	{
+		if (!mStreaming)
+		{
+			if (mBytes.NextEvent() case .Ok(let event))
+				return .Ok(event);
+			return .Err(mBytes.[Friend]mError);
+		}
+		if (mStream.NextEvent() case .Ok(let event))
+			return .Ok(event);
+		return .Err(mStream.[Friend]mError);
+	}
+
+	/// The line and column of an offset at or after the current event's start (Positions).
+	internal bool Locate(int offset, out int line, out int column)
+	{
+		if (mStreaming)
+			return mStream.mCursor.Locate(offset, out line, out column);
+		return mBytes.mCursor.Locate(offset, out line, out column);
+	}
+}
+
+/// The reader itself, over a cursor (in-memory text or a buffered stream). It reads through a window:
+/// `mData[offset]` for `mBase <= offset < mEnd`, offsets absolute, so the offsets it keeps survive the
+/// window moving. Anything that may read at the window's end asks for more first (`Avail`, `PeekAt`,
+/// `NewlineAt`, …); for in-memory text the window is the whole input and those checks compile away.
+internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
+{
+	enum State : uint8
+	{
+		/// Not validated yet.
+		Start,
+		/// Between nodes: before a node, a `}` or the end.
+		Nodes,
+		/// Inside a node, after its name or an entry: before an entry, a children block or a terminator.
+		Entries,
+		End,
+		Failed
+	}
+
+	/// An open node.
+	struct Frame
+	{
+		/// 0: arguments and properties may follow; 1: after a slashdashed children block (only children
+		/// blocks may follow); 2: after the children block (only slashdashed ones may follow).
+		public uint8 mPhase;
+		/// The node is slashdashed.
+		public bool mSlashdashed;
+		/// Its open children block is slashdashed.
+		public bool mChildrenSlashdashed;
+		/// Offset of its open children block's `{`, for the unclosed-block error; with a stream, also
+		/// its line and column (located when read: the stream cannot look back at the end).
+		public int32 mBraceOffset;
+		public int32 mBraceLine;
+		public int32 mBraceColumn;
+		/// Where the node starts (its `/-`, annotation or name).
+		public int32 mStart;
+		/// Its arguments and properties so far, slashdashed ones included (MaxEntriesPerNode).
+		public int32 mEntryCount;
+	}
+
+	internal TCursor mCursor;
+	char8* mData;
+	int mBase;
+	int mPos;
+	int mEnd;
+	/// The start of the construct being read: the cursor keeps bytes from here on in the window
+	/// (int.MaxValue: none, between constructs).
+	int mRetain;
+	/// The cursor stopped on an error of the input; the reader's next error is replaced by it.
+	bool mInputFailed;
+	State mState;
+	/// The open nodes, innermost last. While between nodes, every one of them has its children block open.
+	List<Frame> mFrames ~ delete _;
+	/// How many slashdashed constructs enclose the position; events are reported only at 0.
+	int mSuppressed;
+	/// The property lookahead after the last argument consumed the whitespace before the next entry.
+	bool mPendingSpace;
+	KdlParseError mError;
+
+	String mNameBuffer ~ delete _;
+	String mAnnotationBuffer ~ delete _;
+	String mValueBuffer ~ delete _;
+
+	internal StringView mName;
+	internal StringView mAnnotation;
+	internal bool mHasAnnotation;
+	internal KdlValue mValue;
+	/// ReadEntry's first value while it looks for a `=` (a key, or the argument).
+	KdlValue mEntryValue;
+	internal int mDepth;
+	internal int mEventOffset;
+	internal int mEventEnd;
+	/// Just past the last name, value or `}` read (slashdashed ones included).
+	int mLastTokenEnd;
+
+	KdlReadConfig mConfig;
+	int mNodeCount;
+
+	public this()
+	{
+		mFrames = new .();
+		mNameBuffer = new .();
+		mAnnotationBuffer = new .();
+		mValueBuffer = new .();
+		mConfig = .();
+	}
+
+	public void Reset(TCursor cursor, KdlReadConfig config)
+	{
+		mCursor = cursor;
 		mConfig = config;
+		mData = null;
+		mBase = 0;
+		mPos = 0;
+		mEnd = 0;
+		mRetain = int.MaxValue;
+		mInputFailed = false;
 		mNodeCount = 0;
 		mEventEnd = 0;
 		mLastTokenEnd = 0;
-		mInput = input;
-		mData = input.Ptr;
-		mPos = 0;
-		mEnd = input.Length;
 		mState = .Start;
 		mFrames.Clear();
 		mSuppressed = 0;
@@ -165,40 +272,31 @@ public class KdlReader
 		mAnnotation = default;
 		mHasAnnotation = false;
 		mValue = .Null;
+		mEntryValue = .Null;
 		mDepth = 0;
 		mEventOffset = 0;
 	}
 
-	/// @brief StartNode: the node's name. Property: the key.
-	public StringView Name => mName;
-	/// @brief Whether the node (StartNode) or value (Argument, Property) has a `(type)` annotation.
-	public bool HasAnnotation => mHasAnnotation;
-	/// @brief The annotation's text when HasAnnotation (it may be empty: `("")`).
-	public StringView Annotation => mAnnotation;
-	/// @brief Argument, Property: the value.
-	public KdlValue Value => mValue;
-	/// @brief The depth of the node the event belongs to: 0 for top-level nodes.
-	public int Depth => mDepth;
-	/// @brief Byte offset into the input where the event's construct starts: the node (StartNode,
-	/// EndNode) or entry, including its annotation.
-	public int Offset => mEventOffset;
-	/// @brief Byte offset just past the event's construct: StartNode, the node's name; Argument and
-	/// Property, the value; EndNode, the node's last token (its name, last entry or children block's
-	/// `}`), so Offset ..< EndOffset spans the whole node. EndOfDocument: the input's length.
-	public int EndOffset => mEventEnd;
-
-	/// @brief Read up to the next event.
-	/// @return The event, or the first error in the document.
-	public Result<KdlEvent, KdlParseError> Next()
+	/// The next event; on failure the error is in mError. (KdlReader.Next makes the public Result, so
+	/// the large error is copied once.)
+	[Inline]
+	public Result<KdlEvent, KdlFailure> NextEvent()
 	{
 		if (mState == .Failed)
-			return .Err(mError);
-		switch (ReadNext())
+			return .Err(.());
+		let result = ReadNext();
+		if (result case .Err)
+			mState = .Failed;
+		return result;
+	}
+
+	public Result<KdlEvent, KdlParseError> Next()
+	{
+		switch (NextEvent())
 		{
 		case .Ok(let event):
 			return .Ok(event);
 		case .Err:
-			mState = .Failed;
 			return .Err(mError);
 		}
 	}
@@ -207,11 +305,9 @@ public class KdlReader
 	{
 		if (mState == .Start)
 		{
-			if (mConfig.MaxInputBytes > 0 && mEnd > mConfig.MaxInputBytes)
-				return .Err(Fail(.ResourceLimitExceeded, scope $"The input ({mEnd} bytes) exceeds MaxInputBytes ({mConfig.MaxInputBytes})", 0, 0));
-			switch (KdlChar.ValidateDocument(mInput, let start))
+			switch (mCursor.Begin(ref mData, ref mBase, ref mEnd))
 			{
-			case .Ok:
+			case .Ok(let start):
 				mPos = start;
 			case .Err(let error):
 				mError = error;
@@ -226,11 +322,17 @@ public class KdlReader
 			switch (mState)
 			{
 			case .Nodes:
+				mRetain = int.MaxValue;
 				Try!(SkipLineSpace());
-				if (mPos >= mEnd)
+				if (!Avail(mPos))
 				{
+					if (mInputFailed)
+						return .Err(Fail(.IoError, "", mPos));
 					if (mFrames.Count > 0)
-						return .Err(Fail(.UnbalancedBraces, "Expected `}` to close this children block", mFrames.Back.mBraceOffset));
+					{
+						ref Frame open = ref mFrames.Back;
+						return .Err(FailAt(.UnbalancedBraces, "Expected `}` to close this children block", open.mBraceOffset, open.mBraceLine, open.mBraceColumn));
+					}
 					mState = .End;
 					mDepth = 0;
 					mEventOffset = mPos;
@@ -259,6 +361,7 @@ public class KdlReader
 					continue;
 				}
 				int nodeStart = mPos;
+				mRetain = nodeStart;
 				bool slashdash = false;
 				if (b == '/' && PeekAt(1) == '-')
 				{
@@ -287,18 +390,19 @@ public class KdlReader
 				}
 
 			case .Entries:
+				mRetain = int.MaxValue;
 				bool space = mPendingSpace;
 				mPendingSpace = false;
 				if (Try!(SkipNodeSpace()))
 					space = true;
-				if (mPos >= mEnd)
+				if (!Avail(mPos))
 				{
 					if (EndNode())
 						return .Ok(.EndNode);
 					continue;
 				}
 				char8 c = mData[mPos];
-				int newline = KdlChar.NewlineLength(mData, mPos, mEnd);
+				int newline = NewlineAt(mPos);
 				bool terminated = true;
 				if (newline > 0)
 					mPos += newline;
@@ -328,7 +432,7 @@ public class KdlReader
 					if (mData[mPos] == '{')
 					{
 						current.mChildrenSlashdashed = true;
-						current.mBraceOffset = (int32)mPos;
+						NoteBrace(ref current);
 						mSuppressed++;
 						mPos++;
 						mState = .Nodes;
@@ -341,6 +445,7 @@ public class KdlReader
 					if (!CanStartValue(mPos) && mData[mPos] != '(')
 						return .Err(Unexpected("an argument, property or children block after `/-`"));
 					Try!(CountEntry(ref current));
+					mRetain = mPos;
 					mSuppressed++;
 					Try!(ReadEntry());
 					mSuppressed--;
@@ -350,14 +455,14 @@ public class KdlReader
 				{
 					if (current.mPhase == 2)
 						return .Err(Fail(.InvalidChildren, "A node can have only one children block; slashdash (`/-`) the others", mPos));
-					current.mBraceOffset = (int32)mPos;
+					NoteBrace(ref current);
 					mPos++;
 					mState = .Nodes;
 					continue;
 				}
 				if (!CanStartValue(mPos) && c != '(')
 				{
-					if (mPos > 0 && IsIdentifierByte(mData[mPos - 1]) && (c == '/' || c == '[' || c == ']' || c == ')'))
+					if (IsIdentifierByte(Before(mPos)) && (c == '/' || c == '[' || c == ']' || c == ')'))
 						return .Err(Fail(.UnexpectedChar, scope $"`{c}` cannot appear in an identifier string: quote the string", mPos));
 					return .Err(Unexpected("an argument, property, children block or the end of the node"));
 				}
@@ -369,6 +474,7 @@ public class KdlReader
 					return .Err(MissingSpace());
 				Try!(CountEntry(ref current));
 				int entryStart = mPos;
+				mRetain = entryStart;
 				let event = Try!(ReadEntry());
 				if (mSuppressed == 0)
 				{
@@ -405,6 +511,19 @@ public class KdlReader
 		return true;
 	}
 
+	/// Records where the node's children block opens (`{` at mPos).
+	[Inline]
+	void NoteBrace(ref Frame frame)
+	{
+		frame.mBraceOffset = (int32)mPos;
+		frame.mBraceLine = 0;
+		if (mCursor.LocatesOnlyForward && mCursor.Locate(mPos, let line, let column))
+		{
+			frame.mBraceLine = (int32)line;
+			frame.mBraceColumn = (int32)column;
+		}
+	}
+
 	/// Counts an entry of the current node against MaxEntriesPerNode.
 	[Inline]
 	Result<void, KdlFailure> CountEntry(ref Frame frame)
@@ -420,9 +539,9 @@ public class KdlReader
 		int start = mPos;
 		mPos += 2;
 		Try!(SkipLineSpace());
-		if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+		if (Avail(mPos) && mData[mPos] == '/' && PeekAt(1) == '-')
 			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot be followed by another slashdash", mPos, 2));
-		if (mPos >= mEnd || mData[mPos] == '}' || mData[mPos] == ';')
+		if (!Avail(mPos) || mData[mPos] == '}' || mData[mPos] == ';')
 			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` must be followed by a node, argument, property or children block", start, 2));
 		return .Ok;
 	}
@@ -453,16 +572,16 @@ public class KdlReader
 		int start = mPos;
 		mPos++;
 		Try!(SkipNodeSpace());
-		if (mPos < mEnd && mData[mPos] == ')')
+		if (Avail(mPos) && mData[mPos] == ')')
 			return .Err(Fail(.InvalidAnnotation, "A type annotation cannot be empty", start, mPos + 1 - start));
-		if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+		if (Avail(mPos) && mData[mPos] == '/' && PeekAt(1) == '-')
 			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot appear inside a type annotation; put it before the annotation", mPos, 2));
 		int typeStart = mPos;
 		KdlValue type = Try!(ReadValue(mAnnotationBuffer));
 		if (!type.TryGetString(out mAnnotation))
 			return .Err(Fail(.ExpectedString, "A type annotation must be a string; quote it", typeStart, mPos - typeStart));
 		Try!(SkipNodeSpace());
-		if (mPos >= mEnd || mData[mPos] != ')')
+		if (!Avail(mPos) || mData[mPos] != ')')
 			return .Err(Unexpected("`)` to close the type annotation"));
 		mPos++;
 		mHasAnnotation = true;
@@ -483,22 +602,23 @@ public class KdlReader
 			Try!(ExpectValueAfterAnnotation("a value after the type annotation"));
 		}
 		int tokenStart = mPos;
-		KdlValue value = Try!(ReadValue(mNameBuffer));
+		// A field, not a local: the lookahead below may move the window, and fields are rebased
+		mEntryValue = Try!(ReadValue(mNameBuffer));
 		int tokenEnd = mPos;
 		// Space before a `=` belongs to the property; otherwise it separates this argument from the next entry
 		bool space = Try!(SkipNodeSpace());
-		if (mPos < mEnd && mData[mPos] == '=')
+		if (Avail(mPos) && mData[mPos] == '=')
 		{
-			if (!value.TryGetString(out mName))
+			if (!mEntryValue.TryGetString(out mName))
 				return .Err(Fail(.ExpectedString, "A property key must be a string; quote it", tokenStart, tokenEnd - tokenStart));
 			if (annotated)
 				return .Err(Fail(.InvalidAnnotation, "A type annotation cannot annotate a property key; annotate the value instead (`key=(type)value`)", start, tokenEnd - start));
 			mPos++;
 			Try!(SkipNodeSpace());
 			mHasAnnotation = false;
-			if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+			if (Avail(mPos) && mData[mPos] == '/' && PeekAt(1) == '-')
 				return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot comment out just a property's value; put it before the key", mPos, 2));
-			if (mPos < mEnd && mData[mPos] == '(')
+			if (Avail(mPos) && mData[mPos] == '(')
 			{
 				Try!(ReadAnnotation());
 				Try!(SkipNodeSpace());
@@ -508,7 +628,7 @@ public class KdlReader
 			mLastTokenEnd = mPos;
 			return .Ok(.Property);
 		}
-		mValue = value;
+		mValue = mEntryValue;
 		mPendingSpace = space;
 		mLastTokenEnd = tokenEnd;
 		return .Ok(.Argument);
@@ -520,9 +640,9 @@ public class KdlReader
 	Result<bool, KdlFailure> SkipWhitespace()
 	{
 		int begin = mPos;
-		while (mPos < mEnd)
+		while (Avail(mPos))
 		{
-			int n = KdlChar.UnicodeSpaceLength(mData, mPos, mEnd);
+			int n = SpaceAt(mPos);
 			if (n > 0)
 			{
 				mPos += n;
@@ -544,7 +664,7 @@ public class KdlReader
 		int start = mPos;
 		mPos += 2;
 		int depth = 1;
-		while (mPos < mEnd)
+		while (Avail(mPos))
 		{
 			char8 b = mData[mPos];
 			if (b == '*' && PeekAt(1) == '/')
@@ -569,10 +689,10 @@ public class KdlReader
 	void SkipSingleLineComment()
 	{
 		mPos += 2;
-		while (mPos < mEnd)
+		while (Avail(mPos))
 		{
 			// Newline lead bytes never occur inside a multi-byte sequence, so stepping bytes is safe
-			int n = KdlChar.NewlineLength(mData, mPos, mEnd);
+			int n = NewlineAt(mPos);
 			if (n > 0)
 			{
 				mPos += n;
@@ -586,32 +706,35 @@ public class KdlReader
 	/// @return Whether anything was skipped.
 	Result<bool, KdlFailure> SkipNodeSpace()
 	{
-		// Fast path: ASCII spaces and tabs, then anything that cannot continue node-space
+		// Fast path: ASCII spaces and tabs, then anything that cannot continue node-space (a local
+		// position, so the loop does not store mPos on every byte)
 		int begin = mPos;
-		while (mPos < mEnd && (mData[mPos] == ' ' || mData[mPos] == '\t'))
-			mPos++;
-		if (mPos >= mEnd || !MayContinueSpace(mData[mPos]))
-			return mPos != begin;
+		int p = mPos;
+		while (Avail(p) && (mData[p] == ' ' || mData[p] == '\t'))
+			p++;
+		mPos = p;
+		if (!Avail(p) || !MayContinueSpace(mData[p]))
+			return p != begin;
 		bool any = mPos != begin;
 		while (true)
 		{
 			if (Try!(SkipWhitespace()))
 				any = true;
-			if (mPos >= mEnd || mData[mPos] != '\\')
+			if (!Avail(mPos) || mData[mPos] != '\\')
 				return any;
 			int start = mPos;
 			mPos++;
 			Try!(SkipWhitespace());
-			if (mPos < mEnd)
+			if (Avail(mPos))
 			{
 				if (mData[mPos] == '/' && PeekAt(1) == '/')
 					SkipSingleLineComment();
 				else
 				{
-					int n = KdlChar.NewlineLength(mData, mPos, mEnd);
+					int n = NewlineAt(mPos);
 					if (n == 0)
 					{
-						if (start > 0 && IsIdentifierByte(mData[start - 1]))
+						if (IsIdentifierByte(Before(start)))
 							return .Err(Fail(.InvalidLineContinuation, "`\\` cannot appear in an identifier string: quote the string (a `\\` at the end of a line continues the node)", start));
 						return .Err(Fail(.InvalidLineContinuation, "A line continuation `\\` must be followed by a newline or a `//` comment", start));
 					}
@@ -625,25 +748,28 @@ public class KdlReader
 	/// Skips `line-space*`: node-space, newlines and `//` comments.
 	Result<void, KdlFailure> SkipLineSpace()
 	{
-		// Fast path: ASCII spaces, tabs, LF and CR, then anything that cannot continue line-space
-		while (mPos < mEnd)
+		// Fast path: ASCII spaces, tabs, LF and CR, then anything that cannot continue line-space (a
+		// local position, so the loop does not store mPos on every byte)
+		int p = mPos;
+		while (Avail(p))
 		{
-			char8 c = mData[mPos];
+			char8 c = mData[p];
 			if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
 				break;
-			mPos++;
+			p++;
 		}
-		if (mPos >= mEnd)
+		mPos = p;
+		if (!Avail(p))
 			return .Ok;
-		char8 next = mData[mPos];
+		char8 next = mData[p];
 		if (!MayContinueSpace(next) && next != (char8)0x0B && next != (char8)0x0C)
 			return .Ok;
 		while (true)
 		{
 			Try!(SkipNodeSpace());
-			if (mPos >= mEnd)
+			if (!Avail(mPos))
 				return .Ok;
-			int n = KdlChar.NewlineLength(mData, mPos, mEnd);
+			int n = NewlineAt(mPos);
 			if (n > 0)
 			{
 				mPos += n;
@@ -658,6 +784,142 @@ public class KdlReader
 		}
 	}
 
+	// The window
+
+	/// Whether the byte at `pos` is available, reading more of a stream if needed.
+	[Inline]
+	bool Avail(int pos)
+	{
+		return pos < mEnd || Grow(pos, 1);
+	}
+
+	/// Whether `count` bytes from `pos` are available, reading more of a stream if needed.
+	[Inline]
+	bool AvailN(int pos, int count)
+	{
+		return pos + count <= mEnd || Grow(pos, count);
+	}
+
+	/// Asks the cursor for more input, keeping the current construct, and moves the event's views if
+	/// the window moved. @return Whether `count` bytes from `pos` are now available.
+	/// Inlined so that for in-memory input (Fill is an inlined `false`) it folds to a compare and the
+	/// scanning loops keep the window in registers.
+	[Inline]
+	bool Grow(int pos, int count)
+	{
+		char8* oldData = mData;
+		int oldBase = mBase;
+		int oldEnd = mEnd;
+		bool grew = mCursor.Fill(ref mData, ref mBase, ref mEnd, Math.Min(Math.Min(mRetain, mPos), pos), pos, count);
+		if (mData != oldData)
+			RebaseViews(oldData, oldBase, oldEnd);
+		if (!grew)
+		{
+			// Nothing new: still short (Grow is only asked when it is), so a constant for in-memory input
+			if (mCursor.TryGetInputError(?))
+				mInputFailed = true;
+			return false;
+		}
+		return pos + count <= mEnd;
+	}
+
+	void RebaseViews(char8* oldData, int oldBase, int oldEnd)
+	{
+		char8* low = oldData + oldBase;
+		char8* high = oldData + oldEnd;
+		Rebase(ref mName, low, high, oldData);
+		Rebase(ref mAnnotation, low, high, oldData);
+		Rebase(ref mValue, low, high, oldData);
+		Rebase(ref mEntryValue, low, high, oldData);
+	}
+
+	/// Moves a view of the old window to the same offsets in the new one.
+	void Rebase(ref StringView view, char8* low, char8* high, char8* oldData)
+	{
+		if (view.Ptr >= low && view.Ptr < high)
+			view = .(mData + (view.Ptr - oldData), view.Length);
+	}
+
+	void Rebase(ref KdlValue value, char8* low, char8* high, char8* oldData)
+	{
+		switch (value)
+		{
+		case .String(var s):
+			Rebase(ref s, low, high, oldData);
+			value = .String(s);
+		case .Integer(let v, var text):
+			Rebase(ref text, low, high, oldData);
+			value = .Integer(v, text);
+		case .Float(let v, var text):
+			Rebase(ref text, low, high, oldData);
+			value = .Float(v, text);
+		case .BigInteger(var text):
+			Rebase(ref text, low, high, oldData);
+			value = .BigInteger(text);
+		default:
+		}
+	}
+
+	[Inline]
+	char8 PeekAt(int lookahead)
+	{
+		int pos = mPos + lookahead;
+		return Avail(pos) ? mData[pos] : 0;
+	}
+
+	/// The byte before `pos`, or 0 if there is none in the window (only used to word error messages).
+	[Inline]
+	char8 Before(int pos)
+	{
+		return pos > mBase ? mData[pos - 1] : 0;
+	}
+
+	/// The byte length of the newline at `pos` (which must be available), or 0.
+	[Inline]
+	int NewlineAt(int pos)
+	{
+		uint8 b = (uint8)mData[pos];
+		if (b > 0x0D && b != 0xC2 && b != 0xE2)
+			return 0;
+		if (pos + 3 > mEnd)
+			Grow(pos, 3);
+		return KdlChar.NewlineLength(mData, pos, mEnd);
+	}
+
+	/// The byte length of the Unicode space at `pos` (which must be available), or 0.
+	[Inline]
+	int SpaceAt(int pos)
+	{
+		char8 c = mData[pos];
+		if (c == ' ' || c == '\t')
+			return 1;
+		if ((uint8)c < 0xC2)
+			return 0;
+		if (pos + 3 > mEnd)
+			Grow(pos, 3);
+		return KdlChar.UnicodeSpaceLength(mData, pos, mEnd);
+	}
+
+	/// The code point at `pos` (which must be available) and its length.
+	[Inline]
+	char32 DecodeAt(int pos, out int length)
+	{
+		if ((uint8)mData[pos] < 0x80)
+		{
+			length = 1;
+			return (char32)mData[pos];
+		}
+		if (pos + 4 > mEnd)
+			Grow(pos, 4);
+		return KdlChar.Decode(mData, pos, out length);
+	}
+
+	[Inline]
+	StringView View(int start, int length)
+	{
+		return StringView(mData + start, length);
+	}
+
 	// Helpers
 
 	/// Whether whitespace, a comment or a line continuation may start with `c`, other than an ASCII
@@ -668,30 +930,17 @@ public class KdlReader
 		return c == '/' || c == '\\' || (uint8)c >= 0xC2;
 	}
 
-	[Inline]
-	char8 PeekAt(int lookahead)
-	{
-		int pos = mPos + lookahead;
-		return pos < mEnd ? mData[pos] : 0;
-	}
-
-	[Inline]
-	StringView View(int start, int length)
-	{
-		return StringView(mData + start, length);
-	}
-
 	/// Whether a string, number or keyword can start at `pos`.
 	bool CanStartValue(int pos)
 	{
-		if (pos >= mEnd)
+		if (!Avail(pos))
 			return false;
 		char8 b = mData[pos];
 		if (b == '"' || b == '#')
 			return true;
 		if ((uint8)b < 0x80)
 			return KdlChar.IsIdentifierAscii(b);
-		return KdlChar.IsIdentifierChar(KdlChar.Decode(mData, pos, var length));
+		return KdlChar.IsIdentifierChar(DecodeAt(pos, var length));
 	}
 
 	/// Whether `c` can be part of an identifier (ASCII identifier characters, or any non-ASCII byte:
@@ -705,11 +954,11 @@ public class KdlReader
 	KdlFailure MissingSpace()
 	{
 		char8 c = mData[mPos];
-		char8 previous = mPos > 0 ? mData[mPos - 1] : 0;
+		char8 previous = Before(mPos);
 		if (IsIdentifierByte(previous) && (c == '"' || c == '#' || c == '('))
 		{
 			// `r"…"` / `r#"…"#`: an identifier `r` touching a string
-			if (previous == 'r' && (mPos < 2 || !IsIdentifierByte(mData[mPos - 2])))
+			if (previous == 'r' && !IsIdentifierByte(Before(mPos - 1)))
 				return Fail(.MissingSpace, "Raw strings are written `#\"…\"#` in KDL 2 (`r\"…\"` is KDL 1)", mPos - 1);
 			return Fail(.MissingSpace, scope $"`{c}` cannot appear in an identifier string: quote the string, or separate the values with whitespace", mPos);
 		}
@@ -719,17 +968,42 @@ public class KdlReader
 	/// After a type annotation: the value must follow. A misplaced slashdash gets its own message.
 	Result<void, KdlFailure> ExpectValueAfterAnnotation(StringView expected)
 	{
-		if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+		if (Avail(mPos) && mData[mPos] == '/' && PeekAt(1) == '-')
 			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come after a type annotation; put it before the annotation", mPos, 2));
 		if (!CanStartValue(mPos))
 			return .Err(Unexpected(expected));
 		return .Ok;
 	}
 
-	/// Records the error (Next reports it) and returns the token internal methods fail with.
+	/// Records the error (Next reports it) and returns the token internal methods fail with. After the
+	/// input itself failed (a stream's I/O, encoding or size error), that error is reported instead: the
+	/// reader's own came from running into the end of what could be read.
 	KdlFailure Fail(KdlErrorKind kind, StringView message, int offset, int length = 1)
 	{
-		mError = KdlParseError.At(kind, message, mInput, offset, length);
+		if (mInputFailed && mCursor.TryGetInputError(let inputError))
+			mError = inputError;
+		else
+		{
+			int line = 0;
+			int column = 0;
+			if (mCursor.Locate(offset, var l, var c))
+			{
+				line = l;
+				column = c;
+			}
+			mError = KdlParseError(kind, message, line, column, offset, length);
+		}
+		if (!mConfig.SourceName.IsEmpty)
+			mError.SetSource(mConfig.SourceName);
+		return .();
+	}
+
+	/// Fail at a position located earlier (line 0: locate it now, as Fail does).
+	KdlFailure FailAt(KdlErrorKind kind, StringView message, int offset, int line, int column)
+	{
+		if (line == 0 || (mInputFailed && mCursor.TryGetInputError(?)))
+			return Fail(kind, message, offset);
+		mError = KdlParseError(kind, message, line, column, offset, 1);
 		if (!mConfig.SourceName.IsEmpty)
 			mError.SetSource(mConfig.SourceName);
 		return .();
@@ -742,17 +1016,17 @@ public class KdlReader
 		message.Append("Expected ");
 		message.Append(expected);
 		message.Append(", found ");
-		if (mPos >= mEnd)
+		if (!Avail(mPos))
 		{
 			message.Append("the end of the input");
 			return Fail(.UnexpectedEof, message, mPos, 0);
 		}
 		int length = 1;
-		if (KdlChar.NewlineLength(mData, mPos, mEnd) > 0)
+		if (NewlineAt(mPos) > 0)
 			message.Append("a newline");
 		else
 		{
-			char32 cp = KdlChar.Decode(mData, mPos, out length);
+			char32 cp = DecodeAt(mPos, out length);
 			if ((uint32)cp < 0x20 || KdlChar.IsUnicodeSpace(cp))
 				KdlChar.AppendCodePointName(message, (uint32)cp);
 			else

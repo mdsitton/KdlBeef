@@ -11,6 +11,7 @@ namespace KdlTester;
 ///                                canonical form; exit 1 with the error on stderr if it is invalid.
 ///                                By default through a KdlDocument; `-events` formats straight from
 ///                                the KdlReader's events (KdlCanonical.Format)
+///   KdlTester -stream N [file]   the same through a document read from a Stream with an N-byte buffer
 ///   KdlTester -bench <parse|events|write> <file> <min-samples>
 ///                                the bench/compare harness (see bench/compare/run.sh): prints
 ///                                `nodes: N`, then the median time of a document read (parse), a
@@ -45,11 +46,18 @@ class Program
 		}
 
 		bool events = false;
+		int streamBuffer = 0;
 		String path = null;
-		for (let arg in args)
+		for (int i < args.Count)
 		{
+			let arg = args[i];
 			if (arg == "-events")
 				events = true;
+			else if (arg == "-stream" && i + 1 < args.Count && int.Parse(args[i + 1]) case .Ok(let size))
+			{
+				streamBuffer = size;
+				i++;
+			}
 			else if (arg.StartsWith('-'))
 			{
 				Console.Error.WriteLine($"KdlTester: unknown option {arg}");
@@ -57,6 +65,36 @@ class Program
 			}
 			else
 				path = arg;
+		}
+
+		if (streamBuffer > 0)
+		{
+			// Through a Stream: the file, or stdin
+			var config = KdlReadConfig();
+			config.StreamBufferBytes = streamBuffer;
+			let doc = scope KdlDocument();
+			Result<void, KdlParseError> result;
+			if (path != null)
+			{
+				let file = scope FileStream();
+				if (file.Open(path, .Read, .Read) case .Err)
+				{
+					Console.Error.WriteLine($"KdlTester: cannot read {path}");
+					return 2;
+				}
+				result = doc.Read(file, config);
+			}
+			else
+				result = doc.Read(Console.In.BaseStream, config);
+			if (result case .Err(let error))
+			{
+				Console.Error.WriteLine(error.ToString(.. scope .()));
+				return 1;
+			}
+			let output = doc.Write(.. scope .());
+			Console.Out.Write(output);
+			Console.Out.Flush();
+			return 0;
 		}
 
 		let input = scope String();

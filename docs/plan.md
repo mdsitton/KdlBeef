@@ -330,7 +330,8 @@ first-byte dispatch, number fast paths, arena strings, no per-token allocation. 
 benchmark inputs: document parse ≥ 150 MB/s, event reader ≥ 300 MB/s, canonical write ≥ 300 MB/s
 (ckdl, the fastest today: ~40 MB/s events, ~25 MB/s document).
 
-**Phase 4 — Errors, positions, limits, streams.**
+**Phase 4 — Errors, positions, limits, streams.** *Done except collect-errors: golden messages,
+positions, limits, and streams through a generic cursor (`architecture.md` §3).*
 Located messages for every `_fail` case (golden files), collect-errors mode with recovery, Positions
 sidecar, resource limits, `Read(Stream)` through the buffered cursor (all input paths identical).
 
@@ -371,7 +372,14 @@ Node 26, .NET 10, Python 3.14, GCC 16 + CMake, Zig 0.16 (downloaded by `fetch.sh
 1. **KDL v1 input**: needed at all? (Plan: no until asked; then an explicit converting front end.)
 2. ~~**Parent pointers** on nodes~~ — decided: node IDs with parent/sibling link arrays and a
    `KdlNode` handle with properties (§4.3).
-3. **Collect-errors as the default** for the UI framework's hot reload, or opt-in?
+3. ~~**Collect-errors as the default**~~ — decided (2026-09-29): an opt-in `KdlReadConfig` flag; the
+   default stays stop-at-first.
+6. ~~**PreserveStyle strength**~~ — decided (2026-09-29): TomlBeef's level, not byte-exact: keep
+   comments, blank lines, number and string spellings and indentation style; small whitespace details
+   may normalize. This replaces the byte-exact round trip in §4.7 and phase 5; the round-trip check
+   is semantic (re-reading the output gives the same document) plus preserved comments and formats.
+7. ~~**Streams**~~ — decided (2026-09-29): TomlBeef's design: the reader generic over a cursor
+   (`TomlParserImpl<TCursor>`), with `TomlBufferedStreamCursor` ported.
 4. **Typed mapping defaults** (§4.10): scalar fields as properties, object fields as child nodes —
    agree before phase 6.
 5. **Unicode identifiers** in the UI markup: anything to restrict beyond the spec?

@@ -286,23 +286,38 @@ internal static class KdlChar
 		return 255;
 	}
 
-	/// @brief Check that `input` is valid UTF-8 without disallowed code points, and find where the
-	/// content starts (after an optional BOM, the only place U+FEFF may appear).
-	/// @param input The document bytes.
-	/// @param start Receives the offset of the first content byte (0, or 3 after a BOM).
-	/// @return .Ok, or .Err at the first invalid byte or disallowed code point.
-	public static Result<void, KdlParseError> ValidateDocument(StringView input, out int start)
+	/// @brief Whether the input starts with a UTF-8 byte order mark (the only place U+FEFF may appear).
+	/// @param data The input.
+	/// @param length The bytes available (a BOM needs 3).
+	/// @return Whether it does.
+	public static bool StartsWithBom(char8* data, int length)
 	{
-		uint8* data = (uint8*)input.Ptr;
-		int length = input.Length;
-		start = (length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF) ? 3 : 0;
-		int i = start;
-		while (i < length)
+		return length >= 3 && (uint8)data[0] == 0xEF && (uint8)data[1] == 0xBB && (uint8)data[2] == 0xBF;
+	}
+
+	/// @brief Find the first invalid UTF-8 or disallowed code point in `text[from ..< to]`. Offsets are
+	/// indexes into `text` (a stream passes a window pointer that makes them absolute). A sequence cut
+	/// by `to` is an error: streams pass only complete sequences (`CompleteSequencesEnd`) until their
+	/// input ends.
+	/// @param text The input.
+	/// @param from The first byte to check (after any BOM).
+	/// @param to The end of the range.
+	/// @param message Receives the error message.
+	/// @param kind Receives the error kind.
+	/// @param length Receives the length of the offending bytes.
+	/// @return The offset of the first error, or -1.
+	public static int FindInvalid(char8* text, int from, int to, String message, out KdlErrorKind kind, out int length)
+	{
+		uint8* data = (uint8*)text;
+		kind = .InvalidUtf8;
+		length = 1;
+		int i = from;
+		while (i < to)
 		{
 			// Words of ASCII without banned control characters need no further checks
-			while (i + 8 <= length && IsPlainAsciiWord(data + i))
+			while (i + 8 <= to && IsPlainAsciiWord(data + i))
 				i += 8;
-			int limit = Math.Min(i + 8, length);
+			int limit = Math.Min(i + 8, to);
 			while (i < limit)
 			{
 				uint8 b = data[i];
@@ -314,35 +329,90 @@ internal static class KdlChar
 				if (b < 0x80)
 				{
 					if (b < 0x09 || (b > 0x0D && b < 0x20) || b == 0x7F)
-						return .Err(DisallowedError(input, i, 1, b));
+					{
+						kind = .DisallowedCodePoint;
+						AppendDisallowedMessage(message, b);
+						return i;
+					}
 					i++;
 					continue;
 				}
 				int seqLen = Utf8SequenceLength((char8)b);
 				if (seqLen == 0)
-					return .Err(KdlParseError.At(.InvalidUtf8, "Invalid UTF-8 lead byte", input, i));
-				if (i + seqLen > length)
-					return .Err(KdlParseError.At(.InvalidUtf8, "Truncated UTF-8 sequence", input, i));
+				{
+					message.Append("Invalid UTF-8 lead byte");
+					return i;
+				}
+				if (i + seqLen > to)
+				{
+					message.Append("Truncated UTF-8 sequence");
+					return i;
+				}
 				for (int j = 1; j < seqLen; j++)
 				{
 					if ((data[i + j] & 0xC0) != 0x80)
-						return .Err(KdlParseError.At(.InvalidUtf8, "Invalid UTF-8 continuation byte", input, i + j));
+					{
+						message.Append("Invalid UTF-8 continuation byte");
+						return i + j;
+					}
 				}
-				uint32 cp = (uint32)Decode(input.Ptr, i, var decodedLength);
+				uint32 cp = (uint32)Decode(text, i, var decodedLength);
 				if (seqLen == 2 ? cp < 0x80 : seqLen == 3 ? cp < 0x800 : cp < 0x10000)
-					return .Err(KdlParseError.At(.InvalidUtf8, "Overlong UTF-8 sequence", input, i));
+				{
+					message.Append("Overlong UTF-8 sequence");
+					return i;
+				}
 				if (cp >= 0xD800 && cp <= 0xDFFF)
-					return .Err(KdlParseError.At(.InvalidUtf8, "UTF-8-encoded surrogate", input, i));
+				{
+					message.Append("UTF-8-encoded surrogate");
+					return i;
+				}
 				if (cp > 0x10FFFF)
-					return .Err(KdlParseError.At(.InvalidUtf8, "Code point beyond U+10FFFF", input, i));
+				{
+					message.Append("Code point beyond U+10FFFF");
+					return i;
+				}
 				if (cp == 0xFEFF)
-					return .Err(KdlParseError.At(.DisallowedCodePoint, "A byte order mark (U+FEFF) may only appear at the start of a document", input, i, seqLen));
+				{
+					kind = .DisallowedCodePoint;
+					length = seqLen;
+					message.Append("A byte order mark (U+FEFF) may only appear at the start of a document");
+					return i;
+				}
 				if (IsDisallowed((char32)cp))
-					return .Err(DisallowedError(input, i, seqLen, cp));
+				{
+					kind = .DisallowedCodePoint;
+					length = seqLen;
+					AppendDisallowedMessage(message, cp);
+					return i;
+				}
 				i += seqLen;
 			}
 		}
-		return .Ok;
+		return -1;
+	}
+
+	/// @brief The end of the complete UTF-8 sequences in `text[from ..< to]`: `to`, or the start of a
+	/// sequence cut off by `to` (a stream validates it once the rest arrives).
+	/// @param text The input.
+	/// @param from The start of the range.
+	/// @param to The end of the range.
+	/// @return The end of the complete sequences.
+	public static int CompleteSequencesEnd(char8* text, int from, int to)
+	{
+		for (int back = 1; back <= 3; back++)
+		{
+			int p = to - back;
+			if (p < from)
+				break;
+			uint8 b = (uint8)text[p];
+			if ((b & 0xC0) == 0x80)
+				continue;
+			// A lead byte (or ASCII): cut if its sequence runs past `to`; invalid bytes are FindInvalid's
+			int seqLen = Utf8SequenceLength((char8)b);
+			return (seqLen > 0 && p + seqLen > to) ? p : to;
+		}
+		return to;
 	}
 
 	/// Whether the 8 bytes at `p` are ASCII other than DEL and the control characters, tab, LF and CR
@@ -375,12 +445,11 @@ internal static class KdlChar
 		return ~(((x & low7) + low7) | x | low7);
 	}
 
-	static KdlParseError DisallowedError(StringView input, int offset, int length, uint32 cp)
+	static void AppendDisallowedMessage(String message, uint32 cp)
 	{
-		let message = scope String("The code point ");
+		message.Append("The code point ");
 		AppendCodePointName(message, cp);
 		message.Append(" may not appear literally in a KDL document; use an escape in a quoted string");
-		return KdlParseError.At(.DisallowedCodePoint, message, input, offset, length);
 	}
 
 	/// @brief Append `U+XXXX` (at least four uppercase hex digits).

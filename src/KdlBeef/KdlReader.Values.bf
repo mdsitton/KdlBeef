@@ -4,7 +4,7 @@ using internal KdlBeef;
 namespace KdlBeef;
 
 /// Values: strings (identifier, quoted, raw, multi-line), numbers and keywords.
-extension KdlReader
+extension KdlReaderCore<TCursor>
 {
 	/// Reads a string, number or keyword. Unescaped string text goes to `buffer` when it differs from
 	/// the input; otherwise the value views the input.
@@ -19,7 +19,7 @@ extension KdlReader
 
 	Result<KdlValue, KdlFailure> ReadValueToken(String buffer)
 	{
-		if (mPos >= mEnd)
+		if (!Avail(mPos))
 			return .Err(Unexpected("a value"));
 		char8 b = mData[mPos];
 		if (b == '"')
@@ -35,7 +35,7 @@ extension KdlReader
 	int ScanIdentifier(int pos)
 	{
 		int i = pos;
-		while (i < mEnd)
+		while (Avail(i))
 		{
 			char8 b = mData[i];
 			if ((uint8)b < 0x80)
@@ -45,7 +45,7 @@ extension KdlReader
 				i++;
 				continue;
 			}
-			char32 cp = KdlChar.Decode(mData, i, let length);
+			char32 cp = DecodeAt(i, let length);
 			if (!KdlChar.IsIdentifierChar(cp))
 				break;
 			i += length;
@@ -76,9 +76,9 @@ extension KdlReader
 	{
 		int start = mPos;
 		int hashes = 0;
-		while (mPos + hashes < mEnd && mData[mPos + hashes] == '#')
+		while (Avail(mPos + hashes) && mData[mPos + hashes] == '#')
 			hashes++;
-		if (mPos + hashes < mEnd && mData[mPos + hashes] == '"')
+		if (Avail(mPos + hashes) && mData[mPos + hashes] == '"')
 			return .Ok(.String(Try!(ReadRawString(hashes, buffer))));
 		if (hashes > 1)
 			return .Err(Fail(.UnexpectedChar, "Expected `\"` after the `#`s that open a raw string", start, hashes));
@@ -347,8 +347,8 @@ extension KdlReader
 		// Without escapes the string is a view of the input
 		while (true)
 		{
-			mPos = KdlChar.ScanQuotedText(mData, mPos, mEnd);
-			if (mPos >= mEnd)
+			mPos = ScanQuoted(mPos);
+			if (!Avail(mPos))
 				return .Err(Fail(.UnterminatedString, "Unterminated string: expected a closing `\"`", start));
 			char8 b = mData[mPos];
 			if (b == '"')
@@ -358,18 +358,18 @@ extension KdlReader
 			}
 			if (b == '\\')
 				break;
-			if (KdlChar.NewlineLength(mData, mPos, mEnd) > 0)
+			if (NewlineAt(mPos) > 0)
 				return .Err(NewlineInString());
 			mPos++;
 		}
 		buffer.Clear();
-		buffer.Append((char8*)mData + bodyStart, mPos - bodyStart);
+		buffer.Append(mData + bodyStart, mPos - bodyStart);
 		while (true)
 		{
 			int runStart = mPos;
-			mPos = KdlChar.ScanQuotedText(mData, mPos, mEnd);
+			mPos = ScanQuoted(mPos);
 			buffer.Append(mData + runStart, mPos - runStart);
-			if (mPos >= mEnd)
+			if (!Avail(mPos))
 				return .Err(Fail(.UnterminatedString, "Unterminated string: expected a closing `\"`", start));
 			char8 b = mData[mPos];
 			if (b == '"')
@@ -379,13 +379,40 @@ extension KdlReader
 			}
 			if (b == '\\')
 			{
-				Try!(ReadEscape(mData, ref mPos, mEnd, buffer, -1));
+				// The longest escape, `\u{10FFFF}`, is 10 bytes
+				AvailN(mPos, 12);
+				if (Try!(ReadEscape(mData, ref mPos, mEnd, buffer, -1)))
+				{
+					// A whitespace escape may go on past the window
+					while (Avail(mPos))
+					{
+						int n = SpaceAt(mPos);
+						if (n == 0)
+							n = NewlineAt(mPos);
+						if (n == 0)
+							break;
+						mPos += n;
+					}
+				}
 				continue;
 			}
-			if (KdlChar.NewlineLength(mData, mPos, mEnd) > 0)
+			if (NewlineAt(mPos) > 0)
 				return .Err(NewlineInString());
 			buffer.Append((char8)b);
 			mPos++;
+		}
+	}
+
+	/// Skips plain quoted-string text from `pos` (see KdlChar.ScanQuotedText), across refills.
+	/// @return The offset of the first stop byte, or the end of the input.
+	int ScanQuoted(int pos)
+	{
+		int p = pos;
+		while (true)
+		{
+			p = KdlChar.ScanQuotedText(mData, p, mEnd);
+			if (p < mEnd || !Grow(p, 1))
+				return p;
 		}
 	}
 
@@ -406,7 +433,7 @@ extension KdlReader
 		// The first `"` followed by as many `#`s ends the string
 		while (true)
 		{
-			if (mPos >= mEnd)
+			if (!Avail(mPos))
 				return .Err(UnclosedRawString(start, hashes));
 			char8 b = mData[mPos];
 			if (b == '"' && HashesAt(mPos + 1, hashes))
@@ -415,7 +442,7 @@ extension KdlReader
 				mPos += 1 + hashes;
 				return .Ok(text);
 			}
-			if (KdlChar.NewlineLength(mData, mPos, mEnd) > 0)
+			if (NewlineAt(mPos) > 0)
 				return .Err(UnclosedRawString(start, hashes));
 			mPos++;
 		}
@@ -432,7 +459,7 @@ extension KdlReader
 	[Inline]
 	bool HashesAt(int pos, int count)
 	{
-		if (pos + count > mEnd)
+		if (!AvailN(pos, count))
 			return false;
 		for (int i < count)
 		{
@@ -447,7 +474,7 @@ extension KdlReader
 	Result<StringView, KdlFailure> ReadMultiLineString(String buffer, int start, int hashes)
 	{
 		mPos += 3;
-		int newline = mPos < mEnd ? KdlChar.NewlineLength(mData, mPos, mEnd) : 0;
+		int newline = Avail(mPos) ? NewlineAt(mPos) : 0;
 		if (newline == 0)
 			return .Err(Fail(.InvalidMultiLineString, "A multi-line string's opening `\"\"\"` must be followed by a newline", start, mPos - start));
 		mPos += newline;
@@ -457,7 +484,7 @@ extension KdlReader
 		{
 			while (true)
 			{
-				if (mPos >= mEnd)
+				if (!Avail(mPos))
 					return .Err(Fail(.UnterminatedString, "Unterminated multi-line string: expected a closing `\"\"\"`", start, 3));
 				char8 b = mData[mPos];
 				if (b == '\\')
@@ -477,7 +504,7 @@ extension KdlReader
 		{
 			while (true)
 			{
-				if (mPos >= mEnd)
+				if (!Avail(mPos))
 					return .Err(Fail(.UnterminatedString, "Unterminated multi-line raw string: expected `\"\"\"` followed by as many `#`s as opened it", start, hashes + 3));
 				if (mData[mPos] == '"' && PeekAt(1) == '"' && PeekAt(2) == '"' && HashesAt(mPos + 3, hashes))
 					break;
@@ -627,7 +654,8 @@ extension KdlReader
 
 	/// Decodes the escape at `data[pos]` (a `\`) into `output` and advances past it. Errors point at the
 	/// escape when `fixedErrorOffset` is negative (`data` is the input), else at `fixedErrorOffset`.
-	Result<void, KdlFailure> ReadEscape(char8* data, ref int pos, int end, String output, int fixedErrorOffset)
+	/// @return Whether it was a whitespace escape (which removes the whitespace after it up to `end`).
+	Result<bool, KdlFailure> ReadEscape(char8* data, ref int pos, int end, String output, int fixedErrorOffset)
 	{
 		int errorAt = fixedErrorOffset >= 0 ? fixedErrorOffset : pos;
 		pos++;
@@ -674,13 +702,13 @@ extension KdlReader
 			{
 				// A whitespace escape removes the backslash and all the whitespace after it
 				pos = skipped;
-				return .Ok;
+				return .Ok(true);
 			}
 			if (c == '/')
 				return .Err(Fail(.InvalidEscape, "`\\/` is not an escape in KDL 2: write `/`", errorAt, 2));
 			return .Err(Fail(.InvalidEscape, "Invalid escape: the escapes are \\n \\r \\t \\\\ \\\" \\b \\f \\s \\u{…} and `\\` before whitespace", errorAt, 2));
 		}
 		pos++;
-		return .Ok;
+		return .Ok(false);
 	}
 }

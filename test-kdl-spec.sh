@@ -9,8 +9,9 @@
 # expected_kdl/<name> byte for byte. A crash (exit other than 0 or 1) or a timeout
 # is always a failure. Details of each failure go to test-kdl-spec.log.
 #
-# Every case runs twice: through a KdlDocument (the default) and straight from the reader's events
-# (KdlTester -events). MODES="document" or MODES="events" runs one.
+# Every case runs three times: through a KdlDocument (the default), straight from the reader's events
+# (KdlTester -events), and through a document read from a Stream with a 16-byte buffer (KdlTester
+# -stream 16). MODES="document" (or events, stream) runs some.
 #
 # Fetch the suite first with tests/fetch-spec.sh.
 
@@ -40,9 +41,11 @@ trap 'rm -rf "$tmpdir"' EXIT
 } > "$LOGFILE"
 
 failed=0
-for mode in ${MODES:-document events}; do
+for mode in ${MODES:-document events stream}; do
 flag=""
 [ "$mode" = events ] && flag="-events"
+# A 16-byte buffer: refills land inside tokens, strings, escapes, CRLFs and multi-byte characters
+[ "$mode" = stream ] && flag="-stream 16"
 valid_pass=0
 valid_total=0
 fail_pass=0

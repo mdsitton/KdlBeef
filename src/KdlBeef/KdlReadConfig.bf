@@ -35,4 +35,13 @@ public struct KdlReadConfig
 	/// @brief Maximum length in bytes of any string (a name, key, annotation or value, after
 	/// unescaping). 0 = unlimited.
 	public int MaxStringBytes = 0;
+
+	/// @brief Buffer size in bytes for reading a Stream. 0 = default (64 KiB); values below 16 are
+	/// raised to 16. Setting it also makes KdlDocument.ReadFile stream the file through a buffer of
+	/// this size instead of loading it whole.
+	public int StreamBufferBytes = 0;
+	/// @brief Streams only: the longest construct (a node's head or an entry, with any comments inside
+	/// it; a string of any length) the reader may hold in memory at once. Longer ones grow the buffer,
+	/// bounded otherwise only by MaxInputBytes and MaxStringBytes. 0 = unlimited.
+	public int MaxTokenBytes = 0;
 }
