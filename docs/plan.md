@@ -43,10 +43,12 @@ of the median, median of 3 processes, DNF past 60 s. Full tables: `bench/compare
 What stands out (parse throughput, MB/s of input):
 
 - **The field is slow.** The fastest, ckdl (C, a pull/event parser that builds no document), reads
-  33–49 MB/s; its C++ document API (kdlpp) 23–31. kdly (Go, lossless syntax tree) 18–44, KdlSharp
-  15–35, kdl4j 12–35, @bgotink/kdl 12–18, kdljs 5–13, ckdl's Python binding 15–25. The official Rust
+  33–49 MB/s; its C++ document API (kdlpp) 23–34. kdly (Go, lossless syntax tree) 20–48, kdl4j 17–34,
+  KdlSharp 13–30, @bgotink/kdl 12–18, kdljs 5–13, ckdl's Python binding 15–25. The official Rust
   implementation, kdl-rs, manages **2–3 MB/s** (winnow combinators and an owned String per trivia
-  fragment); kdl-py 0.4–0.6.
+  fragment); kdl-py 0.4–0.6 (DNF on the full HTML standard).
+- Writing a parsed document back is faster everywhere: KdlSharp 93–232 MB/s, kdl-rs 80–356,
+  kdlpp 66–102, @bgotink/kdl 72–311.
 - **Two implementations fail on valid input.** gokdl2 rejects four of the five inputs at positions
   deep in the files (tokens corrupted across its 64 KB refill buffer) and trips on backticks (its
   non-standard expression strings are always on); zig-kdl miscounts nodes under slashdashed
