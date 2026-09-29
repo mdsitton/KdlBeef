@@ -8,10 +8,10 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 - A KDL 2.0.0 library for Beef, built for UI markup. Today it has a **pull reader** (`KdlReader`,
   over text in memory or a `Stream` read through a buffer),
-  a **document** built on it (`KdlDocument` with `KdlNode` handles) with a canonical writer, and a
-  **canonical formatter** that needs no document (`KdlCanonical`), plus mutation, positions and
-  resource limits; format preservation, collect-errors and typed mapping are later phases
-  (`plan.md` §6).
+  a **document** built on it (`KdlDocument` with `KdlNode` handles) with canonical and
+  style-preserving writers, and a **canonical formatter** that needs no document (`KdlCanonical`),
+  plus mutation, positions, resource limits and collect-errors; typed mapping (`[KdlObject]`) is the
+  next phase (`plan.md` §6).
 - **Strict.** Invalid KDL is rejected with a located `KdlParseError` (line, column, byte offset,
   length). Slashdashed content is validated like everything else.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
@@ -27,6 +27,9 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 | `KdlSourceRange.bf` | `KdlSourceRange`: a node's or entry's source line, column, offset and length |
 | `KdlNode.bf` | `KdlNodeId`, the `KdlNode` handle (name, annotation, navigation, argument and property lookups), `KdlNodeList` (children or top-level nodes) |
 | `KdlEntry.bf` | `KdlEntry` (an argument or property view) and `KdlEntryList` |
+| `KdlDocument.Style.bf` | `extension KdlDocument`: PreserveStyle's `KdlNodeStyle`/`KdlEntryStyle` records, capture during a read, the preserving writer, styled value regeneration |
+| `KdlDocument.Mutation.bf` | `extension KdlDocument`: `AddNode`, links, removal, entry growth and the per-entry side tables |
+| `KdlNode.Mutation.bf` | `extension KdlNode`: the public edits (structure, arguments, properties) |
 | `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
 | `KdlReader.bf` | `KdlEvent`; `KdlReader` (public: dispatches to an in-memory or a stream core); `KdlReaderCore<TCursor>`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments, line continuations and the window helpers |
 | `KdlReader.Values.bf` | `extension KdlReaderCore<TCursor>`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
@@ -228,6 +231,41 @@ lexemes (the canonical form writes integers in decimal); PreserveStyle will keep
   have none.
 - Values passed in are copied into the document (`KdlDocumentStore.OwnValue`); a computed float
   without a lexeme is written as its shortest round-trip form with `.0` for integral values.
+
+### PreserveStyle
+
+`KdlMetadataMode.PreserveStyle` keeps the source text of every node and entry, so `Write` gives back
+the document as it was read and regenerates only what changed. The promise is TomlBeef's (comments,
+blank lines, indentation and how values were written survive; `plan.md` §9), but the mechanism makes
+an unchanged document round-trip byte for byte: `test-roundtrip.sh` checks every valid suite input
+and both HTML-standard documents, from memory and through a 16-byte stream buffer, and random
+valid mutations of the suite's inputs all round-trip.
+
+- **Slices.** In this mode the reader cuts the source into one slice per reported event, from the
+  end of the previous event's to the end of its own: a node's name (StartNode), an entry's value, a
+  node's terminator (EndNode: its newline, `;` or `//` comment, or nothing before the parent's `}` or
+  the end), and the rest at EndOfDocument. The slices of all events are the document (after a BOM).
+  Landmarks split them: the node's start, `mNameStart`, the entry's start, `mValueStart`, and a
+  children block's `{` (reported with the block's first reported event) and `}` (with its EndNode).
+  Slashdashed content, comments and whitespace fall inside the slice of the next event. A stream
+  keeps the slice in its window (`RetainIdle`: the slice start instead of nothing).
+- **Pieces.** `KdlDocument.Style.bf` copies them into the store: per node (`KdlNodeStyle`, by ID)
+  the leading text, annotation prefix, name, text before the children (to just after `{`), block
+  end (to just after `}`) and tail; per entry (`KdlEntryStyle`, by index, moving with its entries
+  like the source ranges) the leading text, prefix (key, `=`, annotation) and value; plus the text
+  after the last node, the BOM and the indentation unit (from the first nested node; 4 spaces
+  otherwise).
+- **Writing** (`WritePreserving`) walks the tree like the canonical writer and concatenates the
+  pieces. What is missing or marked dirty is generated: a node added or moved (`LeadingDirty`)
+  starts a new line if the output does not end with one and is indented like the document; a renamed
+  node or changed annotation regenerates that piece; a new children block is ` {` … `}` around the
+  children, before the node's tail (so a trailing comment stays after `}`); a changed value
+  (`ValueDirty`) keeps its original's form (`AppendStyledValue`: radix and hex case for integers;
+  quoted, raw or bare for strings); new entries are ` key=value`. Removing a node or entry removes its
+  leading text (comments before it go with it). `WriteCanonical` gives the canonical form of any
+  document.
+- Plain reads pay one predictable branch per event: speeds are unchanged. A PreserveStyle read runs
+  at 90–155 MB/s and writing it back at 540–890 MB/s.
 
 ### Configuration, limits and positions
 

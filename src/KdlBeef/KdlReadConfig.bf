@@ -10,7 +10,11 @@ public enum KdlMetadataMode : uint8
 	/// @brief Where each node and entry came from (`KdlNode.TryGetSourceRange`,
 	/// `KdlEntry.TryGetSourceRange`), for diagnostics such as "button at main.kdl:12:5". The document
 	/// is still written in canonical form.
-	Positions
+	Positions,
+	/// @brief Positions, plus the source text around and of every node and entry (comments, blank
+	/// lines, indentation, slashdashed content, how names and values were written), so `Write`
+	/// reproduces the document as it was read, regenerating only what was changed.
+	PreserveStyle
 }
 
 /// Settings for reading KDL: metadata, the source name for errors, and resource limits for untrusted

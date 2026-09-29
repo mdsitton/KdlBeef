@@ -60,6 +60,8 @@ extension KdlNode
 		if (!parent.IsValid || parent.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, parent.mId))
 			return false;
 		mDocument.Unlink(mId);
+		// Its indentation (and the comments before it) belonged to its old place
+		mDocument.MarkNode(mId, .LeadingDirty);
 		mDocument.LinkLastChild(parent.mId, mId);
 		return true;
 	}
@@ -69,6 +71,8 @@ extension KdlNode
 	{
 		CheckValid();
 		mDocument.Unlink(mId);
+		// Its indentation (and the comments before it) belonged to its old place
+		mDocument.MarkNode(mId, .LeadingDirty);
 		mDocument.LinkLastChild(0, mId);
 	}
 
@@ -82,6 +86,8 @@ extension KdlNode
 		if (!sibling.IsValid || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
 			return false;
 		mDocument.Unlink(mId);
+		// Its indentation (and the comments before it) belonged to its old place
+		mDocument.MarkNode(mId, .LeadingDirty);
 		mDocument.LinkBefore(sibling.mId, mId);
 		return true;
 	}
@@ -96,6 +102,8 @@ extension KdlNode
 		if (!sibling.IsValid || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
 			return false;
 		mDocument.Unlink(mId);
+		// Its indentation (and the comments before it) belonged to its old place
+		mDocument.MarkNode(mId, .LeadingDirty);
 		mDocument.LinkAfter(sibling.mId, mId);
 		return true;
 	}
@@ -129,6 +137,7 @@ extension KdlNode
 		if (entry < 0)
 			return false;
 		mDocument.mEntries[entry].mValue = mDocument.mStore.OwnValue(value, false);
+		mDocument.MarkEntry(entry, .ValueDirty);
 		return true;
 	}
 
@@ -170,7 +179,10 @@ extension KdlNode
 	{
 		int entry = FindProperty(key);
 		if (entry >= 0)
+		{
 			mDocument.mEntries[entry].mValue = mDocument.mStore.OwnValue(value, false);
+			mDocument.MarkEntry(entry, .ValueDirty);
+		}
 		else
 			mDocument.AppendEntry(mId, mDocument.MakeEntry(true, key, false, default, value));
 	}
@@ -189,6 +201,7 @@ extension KdlNode
 			record.mValue = mDocument.mStore.OwnValue(value, false);
 			record.mAnnotation = mDocument.mStore.NewText(annotation);
 			record.mFlags |= .HasAnnotation;
+			mDocument.MarkEntry(entry, .ValueDirty | .PrefixDirty);
 		}
 		else
 			mDocument.AppendEntry(mId, mDocument.MakeEntry(true, key, true, annotation, value));

@@ -6,12 +6,13 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 38/38 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 38/38 pass |
+| `beefbuild -test` (Debug checks) | 42/42 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 42/42 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
+| `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 38/38 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 42/42 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 14 implementations on 6 inputs; results in `bench/compare/results.md` |
 
@@ -47,7 +48,8 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | Read config, limits, positions | `KdlReadConfig`: source name, MaxDepth (256), MaxInputBytes, MaxNodes, MaxEntriesPerNode, MaxStringBytes (enforced by the reader, so for events too); `KdlMetadataMode.Positions` with `TryGetSourceRange` on nodes and entries |
 | Error messages | Located, with the source name; worded for the likely cause (`r"…"` is KDL 1, `#` inside an identifier, a slashdash after a type annotation, …); golden files for all 95 `_fail` cases |
 | Collect-errors | `KdlReadConfig.CollectErrors` (opt-in) and `MaxErrors`: the reader reports every error and skips each broken node; `KdlDocument` keeps what it read and lists `Errors`. Suite-checked and fuzzed (no crash or hang) |
-| PreserveStyle, `[KdlObject]` | Not started: see `docs/plan.md` §6 and §9 |
+| PreserveStyle | `KdlMetadataMode.PreserveStyle`: unchanged documents write back byte for byte (round-trip script, fuzzed); edits regenerate only what changed (values keep radix and quoting; new nodes follow the document's indentation); `WriteCanonical` for the canonical form. See `architecture.md` §4 |
+| `[KdlObject]` | Not started: see `docs/plan.md` §4.10, §6 and open question 4 |
 
 ## Open items
 
@@ -56,10 +58,10 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 | ID | Item | Size |
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
-| P5 | Rest of phase 5: PreserveStyle at TomlBeef's level (decided, `plan.md` §9): comments, blank lines, number/string formats, indentation style, slashdashed content; preserving writer; mutation keeping neighboring formatting | L |
+| P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
 | P6 | Phase 6: `[KdlObject]` typed mapping | M |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order
 
-P5, then P6; P3's remainder whenever a lookup benchmark says so.
+P6 (after open question 4); P5's refinements and P3's remainder when something needs them.

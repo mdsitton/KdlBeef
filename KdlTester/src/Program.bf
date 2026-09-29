@@ -13,6 +13,8 @@ namespace KdlTester;
 ///                                the KdlReader's events (KdlCanonical.Format)
 ///   KdlTester -stream N [file]   the same through a document read from a Stream with an N-byte buffer
 ///   KdlTester -collect [file]    through a document read with CollectErrors: every error, one per line
+///   KdlTester -preserve [file]   through a document read with PreserveStyle: the input as it was
+///                                (combines with -stream N and -collect)
 ///   KdlTester -bench <parse|events|write> <file> <min-samples>
 ///                                the bench/compare harness (see bench/compare/run.sh): prints
 ///                                `nodes: N`, then the median time of a document read (parse), a
@@ -48,6 +50,7 @@ class Program
 
 		bool events = false;
 		bool collect = false;
+		bool preserve = false;
 		int streamBuffer = 0;
 		String path = null;
 		for (int i < args.Count)
@@ -57,6 +60,8 @@ class Program
 				events = true;
 			else if (arg == "-collect")
 				collect = true;
+			else if (arg == "-preserve")
+				preserve = true;
 			else if (arg == "-stream" && i + 1 < args.Count && int.Parse(args[i + 1]) case .Ok(let size))
 			{
 				streamBuffer = size;
@@ -76,6 +81,8 @@ class Program
 			// Through a Stream: the file, or stdin
 			var config = KdlReadConfig();
 			config.StreamBufferBytes = streamBuffer;
+			if (preserve)
+				config.MetadataMode = .PreserveStyle;
 			let doc = scope KdlDocument();
 			Result<void, KdlParseError> result;
 			if (path != null)
@@ -131,6 +138,8 @@ class Program
 		{
 			let doc = scope KdlDocument();
 			doc.ReadConfig.CollectErrors = collect;
+			if (preserve)
+				doc.ReadConfig.MetadataMode = .PreserveStyle;
 			if (doc.Read(input) case .Err(let error))
 			{
 				if (!collect)
@@ -177,6 +186,13 @@ class Program
 					while (reader.Next() case .Ok(let event) && event != .EndOfDocument) {}
 				}), input.Length);
 		case "write":
+			let output = scope String();
+			PrintResult(Measure(minSamples, scope () => { output.Clear(); doc.Write(output); }), output.Length);
+		case "preserve":
+			// A PreserveStyle read, then writing it back
+			var config = KdlReadConfig();
+			config.MetadataMode = .PreserveStyle;
+			PrintResult(Measure(minSamples, scope () => { doc.Read(input, config).IgnoreError(); }), input.Length);
 			let output = scope String();
 			PrintResult(Measure(minSamples, scope () => { output.Clear(); doc.Write(output); }), output.Length);
 		default:

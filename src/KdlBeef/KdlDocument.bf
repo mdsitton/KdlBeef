@@ -90,6 +90,16 @@ public class KdlDocument
 	internal String mSourceName ~ delete _;
 	/// The errors of the last read with CollectErrors (messages in the store).
 	List<KdlParseError> mErrors ~ delete _;
+	/// PreserveStyle: the source text of each node (by ID) and entry (by index), the text after the
+	/// last node, whether there was a BOM, and the indentation unit (empty: 4 spaces).
+	internal bool mPreserve;
+	internal List<KdlNodeStyle> mNodeStyles ~ delete _;
+	internal List<KdlEntryStyle> mEntryStyles ~ delete _;
+	StringView mTrailing;
+	bool mHasBom;
+	String mIndentUnit ~ delete _;
+	/// Where the current preserving write started in its output.
+	int mWriteStart;
 	/// Changes on every Clear and Read, so handles from before can tell they are stale.
 	internal uint32 mGeneration;
 	/// The reader behind Read, kept for its buffers.
@@ -110,6 +120,9 @@ public class KdlDocument
 		mEntryRanges = new .();
 		mSourceName = new .();
 		mErrors = new .();
+		mNodeStyles = new .();
+		mEntryStyles = new .();
+		mIndentUnit = new .();
 		mNodes.Add(default);
 		mGeneration = 1;
 	}
@@ -131,6 +144,12 @@ public class KdlDocument
 		mEntryRanges.Clear();
 		mSourceName.Clear();
 		mErrors.Clear();
+		mPreserve = false;
+		mNodeStyles.Clear();
+		mEntryStyles.Clear();
+		mTrailing = default;
+		mHasBom = false;
+		mIndentUnit.Clear();
 		mNodes.Add(default);
 		mGeneration++;
 	}
@@ -280,7 +299,9 @@ public class KdlDocument
 	/// source range; with CollectErrors, records the errors and goes on.
 	Result<void, KdlParseError> Build(KdlReader reader, KdlReadConfig config)
 	{
-		bool positions = config.MetadataMode == .Positions;
+		bool preserve = config.MetadataMode == .PreserveStyle;
+		bool positions = config.MetadataMode == .Positions || preserve;
+		mPreserve = preserve;
 		mNodeStack.Clear();
 		if (positions)
 			mNodeRanges.Add(default);
@@ -309,6 +330,8 @@ public class KdlDocument
 			case .StartNode:
 				uint32 id = NewNode(reader.Name, reader.HasAnnotation, reader.Annotation);
 				LinkLastChild(current, id);
+				if (preserve)
+					CaptureStartNode(reader, current, id, mNodeStack.Count);
 				mNodeStack.Add(current);
 				current = id;
 				if (positions)
@@ -316,6 +339,8 @@ public class KdlDocument
 			case .Argument, .Property:
 				if (positions)
 					mEntryRanges.Add(RangeAt(reader, reader.Offset, reader.EndOffset - reader.Offset));
+				if (preserve)
+					CaptureEntry(reader, mEntries.Count);
 				// A node's entries all come before its children, so they are appended contiguously
 				ref KdlNodeRecord node = ref mNodes[current];
 				if (node.mEntryCount == 0)
@@ -343,8 +368,12 @@ public class KdlDocument
 			case .EndNode:
 				if (positions)
 					mNodeRanges[current].mLength = (int32)(reader.EndOffset - reader.Offset);
+				if (preserve)
+					CaptureEndNode(reader, current);
 				current = mNodeStack.PopBack();
 			case .EndOfDocument:
+				if (preserve)
+					CaptureEnd(reader);
 				if (!mErrors.IsEmpty)
 					return .Err(mErrors[0]);
 				return .Ok;
@@ -414,9 +443,21 @@ public class KdlDocument
 
 	// Writing
 
-	/// @brief Append the document in the canonical form (see `KdlCanonical`).
+	/// @brief Append the document as text: as it was read (comments, formatting and all) when it was
+	/// read with KdlMetadataMode.PreserveStyle, with what was changed or added regenerated; otherwise in
+	/// the canonical form (see `KdlCanonical`).
 	/// @param output The string to append to.
 	public void Write(String output)
+	{
+		if (mPreserve)
+			WritePreserving(output);
+		else
+			WriteCanonical(output);
+	}
+
+	/// @brief Append the document in the canonical form (see `KdlCanonical`), however it was read.
+	/// @param output The string to append to.
+	public void WriteCanonical(String output)
 	{
 		int startLength = output.Length;
 		uint32 id = mNodes[0].mFirstChild;

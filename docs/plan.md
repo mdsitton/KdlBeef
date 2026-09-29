@@ -335,7 +335,9 @@ positions, limits, and streams through a generic cursor (`architecture.md` §3).
 Located messages for every `_fail` case (golden files), collect-errors mode with recovery, Positions
 sidecar, resource limits, `Read(Stream)` through the buffered cursor (all input paths identical).
 
-**Phase 5 — PreserveStyle and mutation.** *Mutation API done (`architecture.md` §4).*
+**Phase 5 — PreserveStyle and mutation.** *Done (`architecture.md` §4): unchanged documents round-trip
+byte for byte (beyond the TomlBeef-level promise, because the reader hands out source slices);
+edits regenerate only what changed. Slashdashed content is kept as text, not parsed structure.*
 Trivia sidecar, slashdash structure, preserving writer, mutation API; every valid suite input
 round-trips byte for byte; edits keep neighboring formatting.
 

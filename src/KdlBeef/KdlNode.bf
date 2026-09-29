@@ -76,7 +76,11 @@ public struct KdlNode : IEquatable<KdlNode>
 	public StringView Name
 	{
 		get => Record.mName;
-		set => Record.mName = mDocument.mStore.NewText(value);
+		set
+		{
+			Record.mName = mDocument.mStore.NewText(value);
+			mDocument.MarkNode(mId, .NameDirty);
+		}
 	}
 
 	/// @brief Whether the node has a `(type)` annotation.
@@ -91,6 +95,7 @@ public struct KdlNode : IEquatable<KdlNode>
 		ref KdlNodeRecord node = ref Record;
 		node.mAnnotation = mDocument.mStore.NewText(annotation);
 		node.mFlags |= .HasAnnotation;
+		mDocument.MarkNode(mId, .HeadPrefixDirty);
 	}
 
 	/// @brief Remove the node's type annotation, if it has one.
@@ -99,6 +104,7 @@ public struct KdlNode : IEquatable<KdlNode>
 		ref KdlNodeRecord node = ref Record;
 		node.mAnnotation = default;
 		node.mFlags &= ~.HasAnnotation;
+		mDocument.MarkNode(mId, .HeadPrefixDirty);
 	}
 
 	// Navigation

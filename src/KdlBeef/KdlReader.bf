@@ -166,6 +166,15 @@ public class KdlReader
 		return .Err(mStream.[Friend]mError);
 	}
 
+	// PreserveStyle: the event's source slice and its landmarks (see KdlReaderCore)
+	internal StringView SourceText => mStreaming ? mStream.SourceText : mBytes.SourceText;
+	internal int SourceStart => mStreaming ? mStream.mSourceStart : mBytes.mSourceStart;
+	internal int ContentStart => mStreaming ? mStream.mContentStart : mBytes.mContentStart;
+	internal int NameStart => mStreaming ? mStream.mNameStart : mBytes.mNameStart;
+	internal int ValueStart => mStreaming ? mStream.mValueStart : mBytes.mValueStart;
+	internal int BlockOpenEnd => mStreaming ? mStream.mBlockOpenEnd : mBytes.mBlockOpenEnd;
+	internal int BlockCloseEnd => mStreaming ? mStream.mBlockCloseEnd : mBytes.mBlockCloseEnd;
+
 	/// The line and column of an offset at or after the current event's start (Positions).
 	internal bool Locate(int offset, out int line, out int column)
 	{
@@ -212,6 +221,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		public int32 mStart;
 		/// Its arguments and properties so far, slashdashed ones included (MaxEntriesPerNode).
 		public int32 mEntryCount;
+		/// PreserveStyle: just after the `}` of its (real) children block; 0 if none.
+		public int32 mBlockCloseEnd;
 	}
 
 	internal TCursor mCursor;
@@ -246,6 +257,26 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	internal int mDepth;
 	internal int mEventOffset;
 	internal int mEventEnd;
+
+	// PreserveStyle: the source is cut into one slice per reported event, from the end of the last
+	// one to the end of this one (a node's name, an entry's value, a node's terminator), so the slices
+	// of all events are the whole document. Landmarks are offsets, -1 where absent.
+	bool mCapture;
+	/// Where the next event's slice starts.
+	int mSliceStart;
+	internal int mContentStart;
+	internal int mSourceStart;
+	internal int mSourceEnd;
+	/// StartNode: where the name starts (after any annotation). Argument, Property: where the value
+	/// starts (after any key, `=` and annotation).
+	internal int mNameStart;
+	internal int mValueStart;
+	/// Just after the `{` of a children block, reported with the block's first reported event (its
+	/// first child's StartNode, or the node's EndNode).
+	internal int mBlockOpenEnd;
+	int mPendingBlockOpen;
+	/// EndNode: just after the node's `}`.
+	internal int mBlockCloseEnd;
 	/// Just past the last name, value or `}` read (slashdashed ones included).
 	int mLastTokenEnd;
 
@@ -277,6 +308,16 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		mPos = 0;
 		mEnd = 0;
 		mRetain = int.MaxValue;
+		mCapture = config.MetadataMode == .PreserveStyle;
+		mSliceStart = 0;
+		mContentStart = 0;
+		mSourceStart = 0;
+		mSourceEnd = 0;
+		mNameStart = -1;
+		mValueStart = -1;
+		mBlockOpenEnd = -1;
+		mPendingBlockOpen = -1;
+		mBlockCloseEnd = -1;
 		mInputFailed = false;
 		mNodeCount = 0;
 		mErrorCount = 0;
@@ -363,7 +404,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 				mPos++;
 		}
 		mLastErrorOffset = start;
-		mRetain = int.MaxValue;
+		mRetain = RetainIdle;
 		mPendingSpace = false;
 		mEndAfterRecovery = inNode && mFrames.Count > 0;
 		mState = inNode ? .Entries : .Nodes;
@@ -497,6 +538,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			{
 			case .Ok(let start):
 				mPos = start;
+				mContentStart = start;
+				mSliceStart = start;
 			case .Err(let error):
 				mError = error;
 				if (!mConfig.SourceName.IsEmpty)
@@ -510,7 +553,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			switch (mState)
 			{
 			case .Nodes:
-				mRetain = int.MaxValue;
+				mRetain = RetainIdle;
 				Try!(SkipLineSpace());
 				if (!Avail(mPos))
 				{
@@ -532,6 +575,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					mDepth = 0;
 					mEventOffset = mPos;
 					mEventEnd = mPos;
+					ReportSlice(mPos);
 					return .Ok(.EndOfDocument);
 				}
 				char8 b = mData[mPos];
@@ -550,13 +594,16 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 							frame.mPhase = 1;
 					}
 					else
+					{
 						frame.mPhase = 2;
+						frame.mBlockCloseEnd = (int32)mPos;
+					}
 					mState = .Entries;
 					mPendingSpace = false;
 					continue;
 				}
 				int nodeStart = mPos;
-				mRetain = nodeStart;
+				mRetain = Math.Min(nodeStart, RetainIdle);
 				bool slashdash = false;
 				if (b == '/' && PeekAt(1) == '-')
 				{
@@ -581,6 +628,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					mDepth = mFrames.Count - 1;
 					mEventOffset = nodeStart;
 					mEventEnd = mLastTokenEnd;
+					ReportSlice(mLastTokenEnd);
 					return .Ok(.StartNode);
 				}
 
@@ -593,7 +641,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 						return .Ok(.EndNode);
 					continue;
 				}
-				mRetain = int.MaxValue;
+				mRetain = RetainIdle;
 				bool space = mPendingSpace;
 				mPendingSpace = false;
 				if (Try!(SkipNodeSpace()))
@@ -648,7 +696,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					if (!CanStartValue(mPos) && mData[mPos] != '(')
 						return .Err(Unexpected("an argument, property or children block after `/-`"));
 					Try!(CountEntry(ref current));
-					mRetain = mPos;
+					mRetain = Math.Min(mPos, RetainIdle);
 					mSuppressed++;
 					Try!(ReadEntry());
 					mSuppressed--;
@@ -660,6 +708,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 						return .Err(Fail(.InvalidChildren, "A node can have only one children block; slashdash (`/-`) the others", mPos));
 					NoteBrace(ref current);
 					mPos++;
+					if (mSuppressed == 0)
+						mPendingBlockOpen = mPos;
 					mState = .Nodes;
 					continue;
 				}
@@ -677,13 +727,14 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					return .Err(MissingSpace());
 				Try!(CountEntry(ref current));
 				int entryStart = mPos;
-				mRetain = entryStart;
+				mRetain = Math.Min(entryStart, RetainIdle);
 				let event = Try!(ReadEntry());
 				if (mSuppressed == 0)
 				{
 					mDepth = mFrames.Count - 1;
 					mEventOffset = entryStart;
 					mEventEnd = mLastTokenEnd;
+					ReportSlice(mLastTokenEnd);
 					return .Ok(event);
 				}
 
@@ -711,8 +762,35 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		if (mSuppressed > 0)
 			return false;
 		mDepth = mFrames.Count;
+		mBlockCloseEnd = frame.mBlockCloseEnd > 0 ? frame.mBlockCloseEnd : -1;
+		// Through the terminator (a newline, `;` or `//` comment), or up to the parent's `}` or the end
+		ReportSlice(mPos);
 		return true;
 	}
+
+	/// PreserveStyle: the idle retain point, the start of the next slice (the window must keep it);
+	/// otherwise nothing.
+	int RetainIdle
+	{
+		[Inline]
+		get => mCapture ? mSliceStart : int.MaxValue;
+	}
+
+	/// PreserveStyle: the reported event's slice ends at `sliceEnd`.
+	[Inline]
+	void ReportSlice(int sliceEnd)
+	{
+		if (!mCapture)
+			return;
+		mSourceStart = mSliceStart;
+		mSourceEnd = sliceEnd;
+		mSliceStart = sliceEnd;
+		mBlockOpenEnd = mPendingBlockOpen;
+		mPendingBlockOpen = -1;
+	}
+
+	/// PreserveStyle: the reported event's slice.
+	internal StringView SourceText => StringView(mData + mSourceStart, mSourceEnd - mSourceStart);
 
 	/// Records where the node's children block opens (`{` at mPos).
 	[Inline]
@@ -764,6 +842,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		else if (!CanStartValue(mPos))
 			return .Err(Unexpected("a node"));
 		int nameStart = mPos;
+		mNameStart = nameStart;
 		KdlValue name = Try!(ReadValue(mNameBuffer));
 		if (!name.TryGetString(out mName))
 			return .Err(Fail(.ExpectedString, "A node name must be a string; quote it", nameStart, mPos - nameStart));
@@ -829,11 +908,13 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 				Try!(SkipNodeSpace());
 				Try!(ExpectValueAfterAnnotation("a value after the type annotation"));
 			}
+			mValueStart = mPos;
 			mValue = Try!(ReadValue(mValueBuffer));
 			mLastTokenEnd = mPos;
 			return .Ok(.Property);
 		}
 		mValue = mEntryValue;
+		mValueStart = tokenStart;
 		mPendingSpace = space;
 		mLastTokenEnd = tokenEnd;
 		return .Ok(.Argument);

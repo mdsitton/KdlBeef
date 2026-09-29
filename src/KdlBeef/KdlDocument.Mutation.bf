@@ -107,13 +107,36 @@ extension KdlDocument
 
 	/// Whether entry source ranges are kept (the document was read with Positions); they then mirror
 	/// every change to mEntries.
-	bool HasEntryRanges => !mEntryRanges.IsEmpty;
+	// The per-entry side tables (source ranges, PreserveStyle text) follow their entries: a table is in
+	// use when it is not empty, and entries added since the read have default (empty) records.
 
-	/// Make mEntryRanges as long as mEntries (entries added since the read have no range).
-	void PadEntryRanges()
+	void SideCopy<T>(List<T> list, int32 from, int32 to, int32 count) where T : struct
 	{
-		while (mEntryRanges.Count < mEntries.Count)
-			mEntryRanges.Add(default);
+		if (list.IsEmpty)
+			return;
+		while (list.Count < mEntries.Count)
+			list.Add(default);
+		for (int32 i < count)
+			list[to + i] = list[from + i];
+	}
+
+	void SideClear<T>(List<T> list, int32 at) where T : struct
+	{
+		if (list.IsEmpty)
+			return;
+		while (list.Count < mEntries.Count)
+			list.Add(default);
+		list[at] = default;
+	}
+
+	void SideRemove<T>(List<T> list, int32 at, int32 end) where T : struct
+	{
+		if (list.IsEmpty)
+			return;
+		while (list.Count < mEntries.Count)
+			list.Add(default);
+		for (int32 i = at; i < end - 1; i++)
+			list[i] = list[i + 1];
 	}
 
 	/// Appends an entry to a node, growing its range in place when it can and moving it to the end of
@@ -137,23 +160,16 @@ extension KdlDocument
 				mEntries.GrowUninitialized(capacity);
 				for (int32 i < node.mEntryCount)
 					mEntries[newStart + i] = mEntries[node.mEntryStart + i];
-				if (HasEntryRanges)
-				{
-					PadEntryRanges();
-					for (int32 i < node.mEntryCount)
-						mEntryRanges[newStart + i] = mEntryRanges[node.mEntryStart + i];
-				}
+				SideCopy(mEntryRanges, node.mEntryStart, newStart, node.mEntryCount);
+				SideCopy(mEntryStyles, node.mEntryStart, newStart, node.mEntryCount);
 				node.mEntryStart = newStart;
 				node.mEntryCapacity = capacity;
 			}
 			end = node.mEntryStart + node.mEntryCount;
 		}
 		mEntries[end] = entry;
-		if (HasEntryRanges)
-		{
-			PadEntryRanges();
-			mEntryRanges[end] = default;
-		}
+		SideClear(mEntryRanges, end);
+		SideClear(mEntryStyles, end);
 		node.mEntryCount++;
 	}
 
@@ -165,12 +181,8 @@ extension KdlDocument
 		int32 end = node.mEntryStart + node.mEntryCount;
 		for (int32 i = at; i < end - 1; i++)
 			mEntries[i] = mEntries[i + 1];
-		if (HasEntryRanges)
-		{
-			PadEntryRanges();
-			for (int32 i = at; i < end - 1; i++)
-				mEntryRanges[i] = mEntryRanges[i + 1];
-		}
+		SideRemove(mEntryRanges, at, end);
+		SideRemove(mEntryStyles, at, end);
 		node.mEntryCount--;
 	}
 
