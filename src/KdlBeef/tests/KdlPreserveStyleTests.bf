@@ -21,6 +21,32 @@ static class KdlPreserveStyleTests
 		Test.Assert(output == expected, scope $"got:\n{output}\nexpected:\n{expected}");
 	}
 
+	/// The README's example, from text instead of a file.
+	[Test]
+	public static void Readme_Example()
+	{
+		let doc = scope KdlDocument();
+		doc.ReadConfig.MetadataMode = .PreserveStyle;
+		if (doc.Read("// UI\nbutton \"Save\" on-click=save\nlabel \"Ready\"\n") case .Err(let error))
+			Test.Assert(false, error.ToString(.. scope .()));
+		int handlers = 0;
+		for (let node in doc.Nodes)
+		{
+			if (node.Name == "button" && node.TryGetProperty("on-click", let handler) && handler case .String(let name))
+				handlers += name == "save" ? 1 : 0;
+			node.SetProperty("enabled", .Bool(true));
+		}
+		Test.Assert(handlers == 1);
+		let text = doc.Write(.. scope .());
+		Test.Assert(text == "// UI\nbutton \"Save\" on-click=save enabled=#true\nlabel \"Ready\" enabled=#true\n", text);
+
+		let reader = scope KdlReader(text);
+		int events = 0;
+		while (reader.Next() case .Ok(let event) && event != .EndOfDocument)
+			events++;
+		Test.Assert(events == 9);
+	}
+
 	[Test]
 	public static void Unchanged_WritesTheInputBack()
 	{

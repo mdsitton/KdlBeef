@@ -29,7 +29,7 @@
 - **NEVER REVERT CODE USING GIT OR ANY VERSION CONTROL.** Do not use `git checkout`, `git revert`, `git reset`, or any similar command that discards or rolls back code changes. This destroys work and context. If you think a revert is needed, **end your turn and ask for explicit permission first.**
 - **Never add `Co-Authored-By` or any other attribution trailer to commit messages.**
 - **Use US English spellings** in code, comments and documentation (neighbor, color, behavior).
-- **Verify Beef source/project changes.** After modifying `.bf`, `BeefProj.toml`, or workspace files, run the tests in **both** Debug and Release: `beefbuild -test` and `beefbuild -test -config=TestRelease`. Debug catches runtime-check and allocator issues; Release catches optimizer-dependent bugs. Also run `./test-kdl-spec.sh` against both binaries (`BIN=./build/Release_Linux64/KdlTester/KdlTester` for Release) and `./test-leaks.sh`; `beefbuild -test` does not rebuild `KdlTester`, so run `beefbuild` (and `beefbuild -config=Release`) first. Report results. For docs-only edits, no build is required. If verification cannot be run, say why.
+- **Verify Beef source/project changes.** After modifying `.bf`, `BeefProj.toml`, or workspace files, run the tests in **both** Debug and Release: `beefbuild -test` and `beefbuild -test -config=TestRelease`. Debug catches runtime-check and allocator issues; Release catches optimizer-dependent bugs. Also run `./test-kdl-spec.sh` and `./test-roundtrip.sh` against both binaries (`BIN=./build/Release_Linux64/KdlTester/KdlTester` for Release) and `./test-leaks.sh`; the Windows tests (`~/development/beef-proton/bin/beefbuild-win -test`, and `-config=TestRelease`) before committing; `beefbuild -test` does not rebuild `KdlTester`, so run `beefbuild` (and `beefbuild -config=Release`) first. Report results. For docs-only edits, no build is required. If verification cannot be run, say why.
 
 ## Beef Language Gotchas
 
@@ -146,9 +146,13 @@ Public API surface uses `///` documentation comments with Doxygen-style tags, pl
 
 - `beefbuild -help` is the source of truth for CLI flags.
 - `beefbuild -test` / `beefbuild -test -config=TestRelease` run the `[Test]` methods.
-- `tests/fetch-spec.sh` fetches the pinned official test suite; `./test-kdl-spec.sh` runs it
-  (details in `test-kdl-spec.log`), `./test-leaks.sh` runs the `[Test]`s under LeakSanitizer.
-  The round-trip script comes with PreserveStyle (phase 5).
+- `tests/fetch-spec.sh` fetches the pinned official test suite; `./test-kdl-spec.sh` runs it in
+  four modes (document, events, stream, collect-errors; details in `test-kdl-spec.log`; golden
+  error messages in `tests/errors/`), `./test-roundtrip.sh` checks PreserveStyle round trips,
+  `./test-leaks.sh` runs the `[Test]`s under LeakSanitizer.
+- The reader is generic over a cursor (`KdlReaderCore<TCursor>`): any read that may reach the end of
+  the window goes through `Avail`/`PeekAt`/`NewlineAt`/…, and hot loops keep a local position
+  (`docs/architecture.md` §3). Profile with `perf record` on the Release `KdlTester -bench`.
 - Beef rejects comparing `uint8` with a char literal: text is handled as `char8*`/`char8`, with
   `(uint8)` casts only where hex values are compared.
 - Benchmarks: `bench/compare/` (`fetch.sh`, `build.sh`, `gen-inputs.py`, `run.sh`), following the
