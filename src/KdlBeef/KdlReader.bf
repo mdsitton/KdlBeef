@@ -336,6 +336,8 @@ public class KdlReader
 					}
 					if (current.mPhase != 0)
 						return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
+					if (mData[mPos] == '=')
+						return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come between a property's key and `=`; put it before the key", mPos));
 					if (!CanStartValue(mPos) && mData[mPos] != '(')
 						return .Err(Unexpected("an argument, property or children block after `/-`"));
 					Try!(CountEntry(ref current));
@@ -354,11 +356,17 @@ public class KdlReader
 					continue;
 				}
 				if (!CanStartValue(mPos) && c != '(')
+				{
+					if (mPos > 0 && IsIdentifierByte(mData[mPos - 1]) && (c == '/' || c == '[' || c == ']' || c == ')'))
+						return .Err(Fail(.UnexpectedChar, scope $"`{c}` cannot appear in an identifier string: quote the string", mPos));
 					return .Err(Unexpected("an argument, property, children block or the end of the node"));
+				}
+				if (current.mPhase == 2)
+					return .Err(Fail(.InvalidChildren, "Expected the end of the node (a newline or `;`) after its children block", mPos));
 				if (current.mPhase != 0)
-					return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children block", mPos));
+					return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
 				if (!space)
-					return .Err(Fail(.MissingSpace, "Expected whitespace before this argument or property", mPos));
+					return .Err(MissingSpace());
 				Try!(CountEntry(ref current));
 				int entryStart = mPos;
 				let event = Try!(ReadEntry());
@@ -427,6 +435,7 @@ public class KdlReader
 		{
 			Try!(ReadAnnotation());
 			Try!(SkipNodeSpace());
+			Try!(ExpectValueAfterAnnotation("a node name after the type annotation"));
 		}
 		else if (!CanStartValue(mPos))
 			return .Err(Unexpected("a node"));
@@ -446,6 +455,8 @@ public class KdlReader
 		Try!(SkipNodeSpace());
 		if (mPos < mEnd && mData[mPos] == ')')
 			return .Err(Fail(.InvalidAnnotation, "A type annotation cannot be empty", start, mPos + 1 - start));
+		if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot appear inside a type annotation; put it before the annotation", mPos, 2));
 		int typeStart = mPos;
 		KdlValue type = Try!(ReadValue(mAnnotationBuffer));
 		if (!type.TryGetString(out mAnnotation))
@@ -469,6 +480,7 @@ public class KdlReader
 			Try!(ReadAnnotation());
 			annotated = true;
 			Try!(SkipNodeSpace());
+			Try!(ExpectValueAfterAnnotation("a value after the type annotation"));
 		}
 		int tokenStart = mPos;
 		KdlValue value = Try!(ReadValue(mNameBuffer));
@@ -484,10 +496,13 @@ public class KdlReader
 			mPos++;
 			Try!(SkipNodeSpace());
 			mHasAnnotation = false;
+			if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+				return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot comment out just a property's value; put it before the key", mPos, 2));
 			if (mPos < mEnd && mData[mPos] == '(')
 			{
 				Try!(ReadAnnotation());
 				Try!(SkipNodeSpace());
+				Try!(ExpectValueAfterAnnotation("a value after the type annotation"));
 			}
 			mValue = Try!(ReadValue(mValueBuffer));
 			mLastTokenEnd = mPos;
@@ -595,7 +610,11 @@ public class KdlReader
 				{
 					int n = KdlChar.NewlineLength(mData, mPos, mEnd);
 					if (n == 0)
+					{
+						if (start > 0 && IsIdentifierByte(mData[start - 1]))
+							return .Err(Fail(.InvalidLineContinuation, "`\\` cannot appear in an identifier string: quote the string (a `\\` at the end of a line continues the node)", start));
 						return .Err(Fail(.InvalidLineContinuation, "A line continuation `\\` must be followed by a newline or a `//` comment", start));
+					}
 					mPos += n;
 				}
 			}
@@ -673,6 +692,38 @@ public class KdlReader
 		if ((uint8)b < 0x80)
 			return KdlChar.IsIdentifierAscii(b);
 		return KdlChar.IsIdentifierChar(KdlChar.Decode(mData, pos, var length));
+	}
+
+	/// Whether `c` can be part of an identifier (ASCII identifier characters, or any non-ASCII byte:
+	/// only used to word error messages).
+	static bool IsIdentifierByte(char8 c)
+	{
+		return (uint8)c >= 0x80 || KdlChar.IsIdentifierAscii(c);
+	}
+
+	/// The error for an entry that touches what comes before it, worded for the likely cause.
+	KdlFailure MissingSpace()
+	{
+		char8 c = mData[mPos];
+		char8 previous = mPos > 0 ? mData[mPos - 1] : 0;
+		if (IsIdentifierByte(previous) && (c == '"' || c == '#' || c == '('))
+		{
+			// `r"…"` / `r#"…"#`: an identifier `r` touching a string
+			if (previous == 'r' && (mPos < 2 || !IsIdentifierByte(mData[mPos - 2])))
+				return Fail(.MissingSpace, "Raw strings are written `#\"…\"#` in KDL 2 (`r\"…\"` is KDL 1)", mPos - 1);
+			return Fail(.MissingSpace, scope $"`{c}` cannot appear in an identifier string: quote the string, or separate the values with whitespace", mPos);
+		}
+		return Fail(.MissingSpace, "Expected whitespace before this argument or property", mPos);
+	}
+
+	/// After a type annotation: the value must follow. A misplaced slashdash gets its own message.
+	Result<void, KdlFailure> ExpectValueAfterAnnotation(StringView expected)
+	{
+		if (mPos < mEnd && mData[mPos] == '/' && PeekAt(1) == '-')
+			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come after a type annotation; put it before the annotation", mPos, 2));
+		if (!CanStartValue(mPos))
+			return .Err(Unexpected(expected));
+		return .Ok;
 	}
 
 	/// Records the error (Next reports it) and returns the token internal methods fail with.

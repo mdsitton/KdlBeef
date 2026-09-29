@@ -125,10 +125,10 @@ extension KdlReader
 		if (n - i >= 2 && p[i] == '0' && (p[i + 1] == 'x' || p[i + 1] == 'o' || p[i + 1] == 'b'))
 		{
 			uint32 radix = p[i + 1] == 'x' ? 16 : p[i + 1] == 'o' ? 8 : 2;
-			StringView radixName = radix == 16 ? "hexadecimal" : radix == 8 ? "octal" : "binary";
+			StringView radixName = radix == 16 ? "a hexadecimal" : radix == 8 ? "an octal" : "a binary";
 			i += 2;
 			if (i >= n || KdlChar.HexDigitValue(p[i]) >= radix)
-				return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: a {radixName} prefix must be followed by a digit", offset, n));
+				return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: {radixName} prefix must be followed by a digit", offset, n));
 			uint64 magnitude = 0;
 			bool overflow = false;
 			for (; i < n; i++)
@@ -137,7 +137,7 @@ extension KdlReader
 					continue;
 				uint32 digit = KdlChar.HexDigitValue(p[i]);
 				if (digit >= radix)
-					return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: `{(char8)p[i]}` is not a {radixName} digit", offset, n));
+					return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: `{(char8)p[i]}` is not {radixName} digit", offset, n));
 				if (magnitude > (uint64.MaxValue - digit) / radix)
 					overflow = true;
 				else
@@ -174,7 +174,7 @@ extension KdlReader
 			i = SkipDigits(p, i, n);
 		}
 		if (i < n)
-			return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: unexpected `{(char8)p[i]}`", offset, n));
+			return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: unexpected `{(char8)p[i]}` (text that starts like a number must be one; quote it for a string)", offset, n));
 
 		if (!isFloat)
 		{
@@ -407,7 +407,7 @@ extension KdlReader
 		while (true)
 		{
 			if (mPos >= mEnd)
-				return .Err(Fail(.UnterminatedString, "Unterminated raw string: expected a `\"` followed by as many `#`s as opened it", start, hashes + 1));
+				return .Err(UnclosedRawString(start, hashes));
 			char8 b = mData[mPos];
 			if (b == '"' && HashesAt(mPos + 1, hashes))
 			{
@@ -416,9 +416,17 @@ extension KdlReader
 				return .Ok(text);
 			}
 			if (KdlChar.NewlineLength(mData, mPos, mEnd) > 0)
-				return .Err(Fail(.UnterminatedString, "A single-line raw string cannot contain a newline: use a multi-line raw string (`#\"\"\"`)", mPos));
+				return .Err(UnclosedRawString(start, hashes));
 			mPos++;
 		}
+	}
+
+	/// A single-line raw string that reaches the end of its line or the input unclosed.
+	KdlFailure UnclosedRawString(int start, int hashes)
+	{
+		let closing = scope String("\"");
+		closing.Append('#', hashes);
+		return Fail(.UnterminatedString, scope $"This raw string is not closed on its line: expected `{closing}` (a multi-line raw string starts with `{StringView(mData + start, hashes)}\"\"\"`)", start, hashes + 1);
 	}
 
 	[Inline]
@@ -497,6 +505,8 @@ extension KdlReader
 		}
 		char8* data = text.Ptr;
 		int length = text.Length;
+		// Errors point at the offending line, unless escapes were resolved into a copy
+		int bodyOffset = text.Ptr == body.Ptr ? (int)(body.Ptr - mData) : -1;
 
 		int lastLineStart = 0;
 		for (int i = 0; i < length;)
@@ -512,7 +522,7 @@ extension KdlReader
 		}
 		StringView prefix = text.Substring(lastLineStart);
 		if (!IsAllSpace(prefix))
-			return .Err(Fail(.InvalidMultiLineString, "A multi-line string's closing `\"\"\"` must be on its own line, after only whitespace", start));
+			return .Err(Fail(.InvalidMultiLineString, "A multi-line string's closing `\"\"\"` must be on its own line, after only whitespace", bodyOffset >= 0 ? bodyOffset + lastLineStart : start));
 
 		String joined = escapes ? scope:: String(length) : buffer;
 		joined.Clear();
@@ -529,7 +539,7 @@ extension KdlReader
 			if (!IsAllSpace(line))
 			{
 				if (!line.StartsWith(prefix))
-					return .Err(Fail(.InvalidMultiLineString, "Every line of a multi-line string must start with the same whitespace as its closing line", start));
+					return .Err(Fail(.InvalidMultiLineString, "Every line of a multi-line string must start with the same whitespace as its closing line", bodyOffset >= 0 ? bodyOffset + lineStart : start));
 				joined.Append(line.Substring(prefix.Length));
 			}
 			lineStart = lineEnd + n;
@@ -656,7 +666,7 @@ extension KdlReader
 			if (digits == 0)
 				return .Err(Fail(.InvalidEscape, "A Unicode escape `\\u{…}` needs at least one hex digit", errorAt));
 			if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
-				return .Err(Fail(.InvalidEscape, "A Unicode escape must be a Unicode scalar value (not a surrogate, at most 10FFFF)", errorAt));
+				return .Err(Fail(.InvalidEscape, "A Unicode escape must be a Unicode scalar value (not a surrogate, at most U+10FFFF)", errorAt));
 			KdlChar.EncodeUtf8(output, cp);
 		default:
 			int skipped = SkipSpaceAndNewlines(data, pos, end);

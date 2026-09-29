@@ -1,0 +1,1 @@
+1:7: A single-line string cannot contain a newline: escape it (`\n`), or use a multi-line string (`"""`)

@@ -1,0 +1,1 @@
+1:6: Raw strings are written `#"…"#` in KDL 2 (`r"…"` is KDL 1)

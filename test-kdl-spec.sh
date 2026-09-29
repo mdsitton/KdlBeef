@@ -3,8 +3,10 @@
 # Usage: ./test-kdl-spec.sh            (Debug binary)
 #        BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh
 #
-# A `*_fail.kdl` case must be rejected (exit 1). Every other case must be accepted and its canonical
-# output must equal expected_kdl/<name> byte for byte. A crash (exit other than 0 or 1) or a timeout
+# A `*_fail.kdl` case must be rejected (exit 1) with the error message in tests/errors/<name>.err
+# (golden files: `line:column: message`; UPDATE_GOLDEN=1 rewrites them from the current output, then
+# review the diff). Every other case must be accepted and its canonical output must equal
+# expected_kdl/<name> byte for byte. A crash (exit other than 0 or 1) or a timeout
 # is always a failure. Details of each failure go to test-kdl-spec.log.
 #
 # Every case runs twice: through a KdlDocument (the default) and straight from the reader's events
@@ -14,6 +16,7 @@
 
 BIN="${BIN:-./build/Debug_Linux64/KdlTester/KdlTester}"
 SUITE="${SUITE:-tests/kdl-spec/tests/test_cases}"
+GOLDEN="tests/errors"
 LOGFILE="test-kdl-spec.log"
 
 if [ ! -x "$BIN" ]; then
@@ -62,8 +65,23 @@ for input in "$SUITE"/input/*.kdl; do
 
 	if [[ "$file" == *_fail.kdl ]]; then
 		fail_total=$((fail_total + 1))
+		golden="$GOLDEN/${file%.kdl}.err"
 		if [ $status -eq 1 ]; then
-			fail_pass=$((fail_pass + 1))
+			if [ -n "${UPDATE_GOLDEN:-}" ]; then
+				cp "$tmpdir/err" "$golden"
+				fail_pass=$((fail_pass + 1))
+			elif cmp -s "$tmpdir/err" "$golden"; then
+				fail_pass=$((fail_pass + 1))
+			else
+				{
+					echo "--- ERROR MESSAGE CHANGED: $name ---"
+					echo "Expected ($golden):"
+					cat "$golden" 2>/dev/null || echo "(missing)"
+					echo "Actual:"
+					cat "$tmpdir/err"
+					echo ""
+				} >> "$LOGFILE"
+			fi
 		elif [ $status -eq 0 ]; then
 			{
 				echo "--- ACCEPTED INVALID: $name ---"
@@ -107,7 +125,7 @@ for input in "$SUITE"/input/*.kdl; do
 done
 
 echo "[$mode] valid cases:   $valid_pass/$valid_total match expected_kdl"
-echo "[$mode] invalid cases: $fail_pass/$fail_total rejected"
+echo "[$mode] invalid cases: $fail_pass/$fail_total rejected with the golden message"
 if [ $crashes -gt 0 ]; then
 	echo "[$mode] crashes:       $crashes"
 fi

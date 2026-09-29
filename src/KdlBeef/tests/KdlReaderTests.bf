@@ -268,7 +268,8 @@ static class KdlReaderTests
 		// A whitespace escape that pulls the closing quotes onto a content line
 		AssertError("n \"\"\"\n  a \\\n  \"\"\"", .InvalidMultiLineString, 1, 3);
 		AssertError("n \"\"\"one line\"\"\"", .InvalidMultiLineString, 1, 3);
-		AssertError("n \"\"\"\n\ta\n  \"\"\"", .InvalidMultiLineString, 1, 3);
+		// Pointing at the line whose indentation differs
+		AssertError("n \"\"\"\n\ta\n  \"\"\"", .InvalidMultiLineString, 2, 1);
 		AssertError("n #\"\"\"#", .InvalidMultiLineString, 1, 3);
 	}
 
