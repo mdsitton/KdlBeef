@@ -314,7 +314,8 @@ canonical form from events (buffering one node's properties to sort them) and `t
 the suite. Done when all 95 `_fail` cases fail and the valid cases' event streams are right (most
 expected outputs match already).
 
-**Phase 2 — Document, canonical writer, full suite.**
+**Phase 2 — Document, canonical writer, full suite.** *Done: `KdlDocument` passes the suite through
+`KdlTester` (both modes checked by the script); the property hash index moved to phase 3.*
 `KdlDocument`, store, nodes, entries (`KdlEntryList`), values, number lexemes; canonical writer; the
 test-suite script compares every valid case byte for byte. Done at 243/243 + 95/95, leak-free.
 The document builder consumes `KdlReader` events; the writer reuses `KdlCanonical`'s value, string

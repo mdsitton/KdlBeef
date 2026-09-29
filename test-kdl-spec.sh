@@ -7,6 +7,9 @@
 # output must equal expected_kdl/<name> byte for byte. A crash (exit other than 0 or 1) or a timeout
 # is always a failure. Details of each failure go to test-kdl-spec.log.
 #
+# Every case runs twice: through a KdlDocument (the default) and straight from the reader's events
+# (KdlTester -events). MODES="document" or MODES="events" runs one.
+#
 # Fetch the suite first with tests/fetch-spec.sh.
 
 BIN="${BIN:-./build/Debug_Linux64/KdlTester/KdlTester}"
@@ -25,12 +28,6 @@ fi
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-valid_pass=0
-valid_total=0
-fail_pass=0
-fail_total=0
-crashes=0
-
 {
 	echo "=== KDL spec suite log ==="
 	echo "Date: $(date)"
@@ -39,9 +36,20 @@ crashes=0
 	echo ""
 } > "$LOGFILE"
 
+failed=0
+for mode in ${MODES:-document events}; do
+flag=""
+[ "$mode" = events ] && flag="-events"
+valid_pass=0
+valid_total=0
+fail_pass=0
+fail_total=0
+crashes=0
+
 for input in "$SUITE"/input/*.kdl; do
-	name=$(basename "$input")
-	timeout 10 "$BIN" "$input" > "$tmpdir/out" 2> "$tmpdir/err"
+	file=$(basename "$input")
+	name="$file [$mode]"
+	timeout 10 "$BIN" $flag "$input" > "$tmpdir/out" 2> "$tmpdir/err"
 	status=$?
 	if [ $status -gt 1 ]; then
 		crashes=$((crashes + 1))
@@ -52,7 +60,7 @@ for input in "$SUITE"/input/*.kdl; do
 		} >> "$LOGFILE"
 	fi
 
-	if [[ "$name" == *_fail.kdl ]]; then
+	if [[ "$file" == *_fail.kdl ]]; then
 		fail_total=$((fail_total + 1))
 		if [ $status -eq 1 ]; then
 			fail_pass=$((fail_pass + 1))
@@ -70,7 +78,7 @@ for input in "$SUITE"/input/*.kdl; do
 	fi
 
 	valid_total=$((valid_total + 1))
-	expected="$SUITE/expected_kdl/$name"
+	expected="$SUITE/expected_kdl/$file"
 	if [ $status -eq 1 ]; then
 		{
 			echo "--- REJECTED VALID: $name ---"
@@ -98,12 +106,17 @@ for input in "$SUITE"/input/*.kdl; do
 	fi
 done
 
-echo "Valid cases:   $valid_pass/$valid_total match expected_kdl"
-echo "Invalid cases: $fail_pass/$fail_total rejected"
+echo "[$mode] valid cases:   $valid_pass/$valid_total match expected_kdl"
+echo "[$mode] invalid cases: $fail_pass/$fail_total rejected"
 if [ $crashes -gt 0 ]; then
-	echo "Crashes:       $crashes"
+	echo "[$mode] crashes:       $crashes"
 fi
 if [ $valid_pass -ne $valid_total ] || [ $fail_pass -ne $fail_total ] || [ $crashes -gt 0 ]; then
+	failed=1
+fi
+done
+
+if [ $failed -ne 0 ]; then
 	echo "FAIL: see $LOGFILE"
 	exit 1
 fi

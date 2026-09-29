@@ -6,9 +6,10 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 ## 1. Overview
 
-- A KDL 2.0.0 reader for Beef, built for UI markup. Today it is a **pull reader** (`KdlReader`) and
-  a **canonical formatter** built on it (`KdlCanonical`); the document model, writers, positions,
-  format preservation and typed mapping are later phases (`plan.md` §6).
+- A KDL 2.0.0 library for Beef, built for UI markup. Today it has a **pull reader** (`KdlReader`),
+  a **document** built on it (`KdlDocument` with `KdlNode` handles) with a canonical writer, and a
+  **canonical formatter** that needs no document (`KdlCanonical`); mutation, positions, format
+  preservation and typed mapping are later phases (`plan.md` §6).
 - **Strict.** Invalid KDL is rejected with a located `KdlParseError` (line, column, byte offset,
   length). Slashdashed content is validated like everything else.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
@@ -19,6 +20,10 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 
 | File (`src/KdlBeef/`) | Responsibility |
 |---|---|
+| `KdlDocument.bf` | `KdlDocument`: the node and entry tables (`KdlNodeRecord`, `KdlEntryRecord`), `Read`/`ReadBytes`/`ReadFile` (the builder over `KdlReader`), `Clear`, `GetNode`, the canonical `Write` |
+| `KdlNode.bf` | `KdlNodeId`, the `KdlNode` handle (name, annotation, navigation, argument and property lookups), `KdlNodeList` (children or top-level nodes) |
+| `KdlEntry.bf` | `KdlEntry` (an argument or property view) and `KdlEntryList` |
+| `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
 | `KdlReader.bf` | `KdlEvent`, and `KdlReader`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments and line continuations |
 | `KdlReader.Values.bf` | `extension KdlReader`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
 | `KdlValue.bf` | `KdlValue`, the non-owning tagged union: `Null`, `Bool`, `Integer` (int64 + lexeme), `Float` (double + lexeme), `BigInteger` (lexeme), `String` |
@@ -93,7 +98,50 @@ the node or its open block was slashdashed, so the counter is restored when they
 - Error positions: `KdlParseError.At` computes line and column from the byte offset by rescanning
   the input, counting every KDL newline, so the reader tracks no line state while it reads.
 
-## 4. Canonical form
+## 4. Document
+
+### Nodes are IDs
+
+A node is a `KdlNodeId`, an index into `KdlDocument.mNodes`, a list of `KdlNodeRecord`s: name,
+annotation, entry range, child count and the links (parent, first and last child, next and previous
+sibling; 0 is none). Record 0 is a hidden root whose children are the top-level nodes, so a top-level
+node's parent is 0 and `Parent` returns an invalid handle. There is no per-node object and no
+per-node children list; the design follows Sizzle's `EntityGraph` (`plan.md` §4.3), with the node's
+fields kept together in one record rather than in parallel arrays, since a node's name, entries and
+links are read together.
+
+`KdlNode` is the public face: the document, the ID and the document's generation (16 bytes). Its
+properties read and write the record. The generation changes on every `Clear` and `Read`, so a
+handle from before is invalid even though its ID now names another node; a removed node (phase 5)
+will be flagged in its record, its slot not reused until `Clear`. Navigation properties return invalid
+handles where there is no node; anything else on an invalid handle is a fatal error.
+
+### Entries
+
+`mEntries` holds every entry of the document; a node's are `mEntryStart ..< mEntryStart +
+mEntryCount`. The reader reports a node's entries before its children, so a parse appends each node's
+entries contiguously, in order. `mEntryCapacity` is the room reserved at the start: adding an entry
+past it (mutation, phase 5) moves the node's range to the end of the list, leaving the old range as a
+hole until the next `Clear`. Property lookup scans the node's entries from the end, so the last
+duplicate wins; the hash index for nodes with many properties (`plan.md` §4.3) is not built yet.
+
+### Text
+
+Every string, key, annotation, float lexeme and big integer is copied into the document's arena
+(`KdlDocumentStore`), a `BumpAllocator` whose pools are kept across `Clear` and `Read` (TomlBeef
+measured the page faults of fresh pools at up to 40% of parse time). A plain read drops integer
+lexemes (the canonical form writes integers in decimal); PreserveStyle will keep them.
+
+### Reading and writing
+
+`Read` resets the document, runs a `KdlReader` (kept for its buffers) and turns events into records
+with a stack of open node IDs; on an error the document is cleared. `Write` walks the tree through
+the links (first child, else next sibling, else up to the parent's next sibling, closing blocks), so
+it needs neither recursion nor a stack, and writes each node's head with the same formatting helpers
+as `KdlCanonical`. The two paths are checked against each other: the suite script runs both, and they
+agree on the HTML-standard document.
+
+## 5. Canonical form
 
 `KdlCanonical.Format` drives a `KdlReader` and buffers one pending line per open depth (reused across
 nodes): the head (indent, annotation, name, arguments) and the properties (raw key, formatted value).
