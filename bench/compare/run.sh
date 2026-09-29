@@ -12,6 +12,8 @@
 # differs from the reference (ckdl's) is FAIL, like a parse error. DNF: a run past LIMIT seconds
 # (default 60). n/a: the library has no writer (ckdl's C core and zig-kdl are event parsers).
 # Setup: ./fetch.sh && ./build.sh && ./gen-inputs.py   Usage: run.sh [min-samples] [inputs...]
+# KdlBeef's rows need the Release KdlTester: beefbuild -config=Release at the repository root.
+# ONLY="KdlBeef|KdlBeef events" restricts the run to those columns.
 set -uo pipefail
 C="$(cd "$(dirname "$0")" && pwd)"
 B="$C/bin"
@@ -28,7 +30,11 @@ else
 fi
 
 # name|command prefix (the harness takes <parse|write> <file> <min-samples> after it)
+# KdlBeef: the Release KdlTester (beefbuild -config=Release at the repository root)
+KT="$C/../../build/Release_Linux64/KdlTester/KdlTester"
 LIBS=(
+	"KdlBeef|$KT -bench"
+	"KdlBeef events|$KT -bench-events"
 	"ckdl|$B/ckdl"
 	"kdlpp|$B/kdlpp"
 	"kdl-rs|$B/rust-kdlbench"
@@ -61,6 +67,17 @@ cell() { # expected-nodes mode file command...
 	done
 	printf '%s\n' "${values[@]}" | sort -g | awk '{a[NR] = $1} END {print (NR % 2) ? a[(NR + 1) / 2] : (a[NR / 2] + a[NR / 2 + 1]) / 2}'
 }
+
+# ONLY="name1|name2" runs just those implementations (e.g. ONLY="KdlBeef|KdlBeef events")
+if [ -n "${ONLY:-}" ]; then
+	selected=()
+	for lib in "${LIBS[@]}"; do
+		if [[ "|$ONLY|" == *"|${lib%%|*}|"* ]]; then
+			selected+=("$lib")
+		fi
+	done
+	LIBS=("${selected[@]}")
+fi
 
 header="| input |"
 rule="|---|"

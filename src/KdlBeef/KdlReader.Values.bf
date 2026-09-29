@@ -8,7 +8,7 @@ extension KdlReader
 {
 	/// Reads a string, number or keyword. Unescaped string text goes to `buffer` when it differs from
 	/// the input; otherwise the value views the input.
-	Result<KdlValue, KdlParseError> ReadValue(String buffer)
+	Result<KdlValue, KdlFailure> ReadValue(String buffer)
 	{
 		if (mPos >= mEnd)
 			return .Err(Unexpected("a value"));
@@ -46,7 +46,7 @@ extension KdlReader
 
 	/// Reads an identifier string, or a number: a bare token that starts like a number (a digit, or a
 	/// `.` followed by a digit, after an optional sign) must be a valid one.
-	Result<KdlValue, KdlParseError> ReadBareToken()
+	Result<KdlValue, KdlFailure> ReadBareToken()
 	{
 		int start = mPos;
 		int end = ScanIdentifier(start);
@@ -63,7 +63,7 @@ extension KdlReader
 	}
 
 	/// Reads a raw string (`#"…"#`) or a keyword (`#true`).
-	Result<KdlValue, KdlParseError> ReadHashToken(String buffer)
+	Result<KdlValue, KdlFailure> ReadHashToken(String buffer)
 	{
 		int start = mPos;
 		int hashes = 0;
@@ -94,9 +94,16 @@ extension KdlReader
 	// Numbers
 
 	/// Parses a bare token that starts like a number.
-	Result<KdlValue, KdlParseError> ParseNumber(StringView token, int offset)
+	Result<KdlValue, KdlFailure> ParseNumber(StringView token, int offset)
 	{
-		char8* p =token.Ptr;
+		// The common forms first; anything else (radixes, underscores, long or invalid tokens) falls
+		// through to the full parse below, so errors are unchanged
+		if (TryParsePlainInteger(token, var plainInteger))
+			return .Ok(.Integer(plainInteger, token));
+		if (TryParsePlainFloat(token, var plainFloat))
+			return .Ok(.Float(plainFloat, token));
+
+		char8* p = token.Ptr;
 		int n = token.Length;
 		int i = 0;
 		bool negative = false;
@@ -177,14 +184,21 @@ extension KdlReader
 			return .Ok(MakeInteger(negative, magnitude, overflow, token));
 		}
 
-		let clean = scope String(n);
-		for (int j < n)
+		// Double.Parse takes no underscores: copy without them (on the stack for any sane length)
+		StringView digits = token;
+		if (token.Contains('_'))
 		{
-			if (p[j] != '_')
-				clean.Append((char8)p[j]);
+			char8* clean = n <= 128 ? scope:: char8[128]* : scope:: char8[n]*;
+			int length = 0;
+			for (int j < n)
+			{
+				if (p[j] != '_')
+					clean[length++] = p[j];
+			}
+			digits = .(clean, length);
 		}
 		double value;
-		switch (double.Parse(clean))
+		switch (double.Parse(digits))
 		{
 		case .Ok(let parsed):
 			value = parsed;
@@ -195,6 +209,98 @@ extension KdlReader
 				value = -value;
 		}
 		return .Ok(.Float(value, token));
+	}
+
+	/// One-pass parse of an optional sign and 1–18 decimal digits (leading zeros allowed, as in KDL):
+	/// valid as written and unable to overflow int64. Anything else returns false and takes the full
+	/// path. (TomlBeef's TryParsePlainInteger.)
+	[Inline]
+	static bool TryParsePlainInteger(StringView token, out int64 value)
+	{
+		value = 0;
+		char8* ptr = token.Ptr;
+		int length = token.Length;
+		int pos = (ptr[0] == '-' || ptr[0] == '+') ? 1 : 0;
+		int digits = length - pos;
+		if (digits < 1 || digits > 18)
+			return false;
+		int64 result = 0;
+		for (int i = pos; i < length; i++)
+		{
+			uint8 digit = (uint8)ptr[i] - (uint8)'0';
+			if (digit > 9)
+				return false;
+			result = result * 10 + digit;
+		}
+		value = (ptr[0] == '-') ? -result : result;
+		return true;
+	}
+
+	/// Powers of ten that a double holds exactly (5^22 < 2^53).
+	const double[23] cExactPowersOf10 = .(1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
+		1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22);
+
+	/// One-pass parse of a decimal without underscores, `[sign]digits[.digits][(e|E)[sign]digits]`
+	/// with a fraction or exponent, whose digits fit an exact double mantissa (at most 2^53, 19 digits)
+	/// and whose decimal exponent is within ±22. Then mantissa and power of ten are both exact, and one
+	/// IEEE multiply or divide rounds correctly (Clinger's fast path), bit-identical to Double.Parse.
+	/// Anything else returns false and takes the full path. (TomlBeef's TryParsePlainFloat, with KDL's
+	/// leading zeros allowed.)
+	static bool TryParsePlainFloat(StringView token, out double value)
+	{
+		value = 0;
+		char8* ptr = token.Ptr;
+		int length = token.Length;
+		int pos = (ptr[0] == '-' || ptr[0] == '+') ? 1 : 0;
+
+		uint64 mantissa = 0;
+		int intStart = pos;
+		while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - intStart < 19)
+			mantissa = mantissa * 10 + ((uint8)ptr[pos++] - (uint8)'0');
+		int intDigits = pos - intStart;
+		if (intDigits == 0)
+			return false;
+
+		int exponent = 0;
+		bool isFloat = false;
+		if (pos < length && ptr[pos] == '.')
+		{
+			pos++;
+			int fracStart = pos;
+			while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - fracStart + intDigits < 19)
+				mantissa = mantissa * 10 + ((uint8)ptr[pos++] - (uint8)'0');
+			if (pos == fracStart)
+				return false;
+			exponent = -(pos - fracStart);
+			isFloat = true;
+		}
+		if (pos < length && (ptr[pos] == 'e' || ptr[pos] == 'E'))
+		{
+			pos++;
+			bool negativeExponent = false;
+			if (pos < length && (ptr[pos] == '-' || ptr[pos] == '+'))
+				negativeExponent = ptr[pos++] == '-';
+			int expStart = pos;
+			int expValue = 0;
+			while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - expStart < 4)
+				expValue = expValue * 10 + ((uint8)ptr[pos++] - (uint8)'0');
+			if (pos == expStart)
+				return false;
+			exponent += negativeExponent ? -expValue : expValue;
+			isFloat = true;
+		}
+		// A leftover character (an underscore, a 20th digit, a 5-digit exponent, anything invalid) or a
+		// plain integer goes to the full path
+		if (pos != length || !isFloat || mantissa > (1UL << 53) || exponent < -22 || exponent > 22)
+			return false;
+
+		double result = (double)mantissa;
+		if (exponent < 0)
+			result /= cExactPowersOf10[-exponent];
+		else
+			result *= cExactPowersOf10[exponent];
+		value = (ptr[0] == '-') ? -result : result;
+		return true;
 	}
 
 	/// Skips `(digit | '_')*`. @return The offset after them.
@@ -222,7 +328,7 @@ extension KdlReader
 	// Strings
 
 	/// Reads a quoted string, single- or multi-line.
-	Result<StringView, KdlParseError> ReadQuotedString(String buffer)
+	Result<StringView, KdlFailure> ReadQuotedString(String buffer)
 	{
 		int start = mPos;
 		if (PeekAt(1) == '"' && PeekAt(2) == '"')
@@ -232,6 +338,7 @@ extension KdlReader
 		// Without escapes the string is a view of the input
 		while (true)
 		{
+			mPos = KdlChar.ScanQuotedText(mData, mPos, mEnd);
 			if (mPos >= mEnd)
 				return .Err(Fail(.UnterminatedString, "Unterminated string: expected a closing `\"`", start));
 			char8 b = mData[mPos];
@@ -250,6 +357,9 @@ extension KdlReader
 		buffer.Append((char8*)mData + bodyStart, mPos - bodyStart);
 		while (true)
 		{
+			int runStart = mPos;
+			mPos = KdlChar.ScanQuotedText(mData, mPos, mEnd);
+			buffer.Append(mData + runStart, mPos - runStart);
 			if (mPos >= mEnd)
 				return .Err(Fail(.UnterminatedString, "Unterminated string: expected a closing `\"`", start));
 			char8 b = mData[mPos];
@@ -270,13 +380,13 @@ extension KdlReader
 		}
 	}
 
-	KdlParseError NewlineInString()
+	KdlFailure NewlineInString()
 	{
 		return Fail(.UnterminatedString, "A single-line string cannot contain a newline: escape it (`\\n`), or use a multi-line string (`\"\"\"`)", mPos);
 	}
 
 	/// Reads a raw string; `mPos` is at the first of `hashes` `#`s.
-	Result<StringView, KdlParseError> ReadRawString(int hashes, String buffer)
+	Result<StringView, KdlFailure> ReadRawString(int hashes, String buffer)
 	{
 		int start = mPos;
 		mPos += hashes;
@@ -317,7 +427,7 @@ extension KdlReader
 
 	/// Reads a multi-line string (raw when `hashes` > 0); `mPos` is at its `"""`, `start` at the
 	/// string's first byte.
-	Result<StringView, KdlParseError> ReadMultiLineString(String buffer, int start, int hashes)
+	Result<StringView, KdlFailure> ReadMultiLineString(String buffer, int start, int hashes)
 	{
 		mPos += 3;
 		int newline = mPos < mEnd ? KdlChar.NewlineLength(mData, mPos, mEnd) : 0;
@@ -367,7 +477,7 @@ extension KdlReader
 	/// into its value, in the spec's order: resolve whitespace escapes; split into lines; the last line
 	/// (whitespace only) is the prefix every other line must start with, and is removed with it; lines of
 	/// only whitespace become empty; join with LF; then resolve the other escapes.
-	Result<void, KdlParseError> Dedent(StringView body, bool escapes, String buffer, int start)
+	Result<void, KdlFailure> Dedent(StringView body, bool escapes, String buffer, int start)
 	{
 		StringView text = body;
 		if (escapes && body.Contains('\\'))
@@ -498,7 +608,7 @@ extension KdlReader
 
 	/// Decodes the escape at `data[pos]` (a `\`) into `output` and advances past it. Errors point at the
 	/// escape when `fixedErrorOffset` is negative (`data` is the input), else at `fixedErrorOffset`.
-	Result<void, KdlParseError> ReadEscape(char8* data, ref int pos, int end, String output, int fixedErrorOffset)
+	Result<void, KdlFailure> ReadEscape(char8* data, ref int pos, int end, String output, int fixedErrorOffset)
 	{
 		int errorAt = fixedErrorOffset >= 0 ? fixedErrorOffset : pos;
 		pos++;

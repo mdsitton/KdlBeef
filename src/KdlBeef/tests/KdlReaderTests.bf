@@ -202,6 +202,43 @@ static class KdlReaderTests
 	}
 
 	[Test]
+	public static void Numbers_FastPathsMatchDoubleParse()
+	{
+		// The plain-float fast path must round exactly as Double.Parse does; so must the fallback
+		let random = scope Random(12345);
+		let input = scope String("n");
+		let texts = scope System.Collections.List<String>();
+		defer { ClearAndDeleteItems!(texts); }
+		for (int i < 2000)
+		{
+			let text = new String();
+			double mantissa = random.NextDouble() * Math.Pow(10, random.Next(0, 12));
+			mantissa.ToString(text);
+			if (!text.Contains('.') && !text.Contains('E') && !text.Contains('e'))
+				text.Append(".5");
+			switch (i % 4)
+			{
+			case 1: text.AppendF("e{}", random.Next(-30, 30));
+			case 2: text.AppendF("E+{}", random.Next(0, 30));
+			case 3: text.Insert(0, "-");
+			default:
+			}
+			texts.Add(text);
+			input.Append(' ');
+			input.Append(text);
+		}
+		let reader = scope KdlReader(input);
+		Expect(reader, .StartNode);
+		for (let text in texts)
+		{
+			Expect(reader, .Argument);
+			Test.Assert(reader.Value case .Float(let v, let written), scope $"`{text}` is not a float");
+			Test.Assert(written == text);
+			Test.Assert(v == double.Parse(text).Value, scope $"`{text}`: {v} vs {double.Parse(text).Value}");
+		}
+	}
+
+	[Test]
 	public static void Strings_EscapesAndIdentifiers()
 	{
 		AssertCanonical("n \"1\\\n\n\n2\"", "n \"12\"\n");

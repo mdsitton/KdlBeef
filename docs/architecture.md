@@ -41,8 +41,9 @@ Tests are in `src/KdlBeef/tests/`; the CLI is `KdlTester/src/Program.bf`; the ac
 
 `KdlChar.ValidateDocument` runs once over the whole input before the first event: UTF-8 validity
 (overlongs, surrogates, > U+10FFFF) and the code points KDL bans everywhere (U+0000–0008,
-U+000E–001F, DEL, bidi controls, U+FEFF after position 0). Words of printable ASCII are skipped 8
-bytes at a time. Doing it up front means no scanner below has to check for banned or malformed
+U+000E–001F, DEL, bidi controls, U+FEFF after position 0). Words of ASCII with no control
+characters other than tab, LF and CR are skipped 8 bytes at a time (`IsPlainAsciiWord`, exact
+per-byte tests), so indented text rarely leaves the word loop. Doing it up front means no scanner below has to check for banned or malformed
 sequences: comment, string and whitespace scans only look for their own stop characters, and
 multi-byte newlines and spaces are recognized by their UTF-8 bytes (`NewlineLength`,
 `UnicodeSpaceLength`; every non-ASCII one starts with 0xC2, 0xE1, 0xE2 or 0xE3). The plan considered
@@ -74,6 +75,20 @@ the node or its open block was slashdashed, so the counter is restored when they
 
 **Errors are sticky.** The first error puts the reader in a failed state; `Next` returns it again.
 `Reset` starts over with the same buffers.
+
+**Internal results carry no error.** Every internal method returns `Result<T, KdlFailure>`, where
+`KdlFailure` is an empty struct: `Fail(...)` records the `KdlParseError` in the reader and returns the
+token, so `.Err(Fail(...))` and `Try!` read as usual, and only `Next` turns the failure back into the
+recorded error. With the error (about 56 bytes) in every `Result`, returning values cost more than
+reading them; this change alone took the event pass from about 225 to 330 MB/s.
+
+**Fast paths** (phase 3): `SkipNodeSpace` and `SkipLineSpace` step over ASCII spaces, tabs (and for
+line-space LF and CR) inline and return unless the next byte could continue whitespace (`/`, `\`, a
+non-ASCII lead byte); quoted-string bodies are scanned 8 bytes at a time
+(`KdlChar.ScanQuotedText`: stops at `"`, `\`, controls up to CR, 0xC2 and 0xE2); numbers try
+TomlBeef's `TryParsePlainInteger` and `TryParsePlainFloat` (Clinger's exact fast path,
+bit-identical to `Double.Parse`, checked by a test) before the full parse, whose float fallback strips
+underscores on the stack.
 
 ### Values
 

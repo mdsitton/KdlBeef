@@ -6,14 +6,29 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 17/17 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 17/17 pass |
+| `beefbuild -test` (Debug checks) | 18/18 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 18/18 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In both modes (document, events): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 17/17 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 18/18 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
-| `bench/compare/run.sh` | Runs 12 implementations on 6 inputs; results in `bench/compare/results.md` (no KdlBeef row yet) |
+| `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 14 implementations on 6 inputs; results in `bench/compare/results.md` |
+
+## Performance baseline
+
+`bench/compare/results.md` (MB/s; the benchmark rule of `run.sh`):
+
+| | ui | config | strings | numbers | html-standard | html-standard-compact |
+|---|---:|---:|---:|---:|---:|---:|
+| Document read | 266 | 230 | 299 | 140 | 246 | 254 |
+| Event pass (`KdlReader`) | 335 | 307 | 345 | 177 | 328 | 338 |
+| Canonical write (MB/s of output) | 327 | 390 | 532 | 315 | 414 | 424 |
+
+The fastest other implementation reads 33–49 MB/s (ckdl, events only) and writes up to 356 MB/s
+(kdl-rs, strings). `numbers` is below the plan's 150 MB/s document target: after the number fast
+paths it spends its time in the digit loops of hex/octal/binary and underscored tokens and in copying
+float lexemes into the document (the canonical form needs them).
 
 Any change to `.bf` files must keep these green in both Debug and Release.
 
@@ -27,17 +42,13 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | `KdlTester` | Prints the canonical form of a file or stdin through a document, or with `-events` straight from the reader; exit 1 on invalid input |
 | Positions, limits, streams, PreserveStyle, mutation, `[KdlObject]` | Not started: see `docs/plan.md` §6 |
 
-Unmeasured indication (not the benchmark rule): the Release `KdlTester` formats the 21 MB HTML
-standard, process start to exit (37 MB of output), in 0.28 s through a document and 0.24 s from
-events.
-
 ## Open items
 
 Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 | ID | Item | Size |
 |----|------|------|
-| P3 | Phase 3: `KdlTester -bench`, KdlBeef rows in `bench/compare`, profiling (SWAR scans, number fast paths), the property hash index for nodes with more than 8 properties (`plan.md` §4.3) | M |
+| P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P4 | Phase 4: golden error messages per `_fail` case, collect-errors mode, positions, limits (depth, nodes, entries, string bytes), streams | M |
 | P5 | Phase 5: PreserveStyle round trip and mutation API | L |
 | P6 | Phase 6: `[KdlObject]` typed mapping | M |

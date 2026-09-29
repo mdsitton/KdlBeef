@@ -4,6 +4,13 @@ using internal KdlBeef;
 
 namespace KdlBeef;
 
+/// The error type of the reader's internal methods: empty, so their results are no bigger than their
+/// values (a KdlParseError in every Result was copied on each return, a measurable cost). The error
+/// itself is recorded in the reader by Fail, and Next returns it.
+internal struct KdlFailure
+{
+}
+
 /// @brief What KdlReader.Next reached.
 public enum KdlEvent : uint8
 {
@@ -149,21 +156,28 @@ public class KdlReader
 	{
 		if (mState == .Failed)
 			return .Err(mError);
-		let result = ReadNext();
-		if (result case .Err(let error))
+		switch (ReadNext())
 		{
+		case .Ok(let event):
+			return .Ok(event);
+		case .Err:
 			mState = .Failed;
-			mError = error;
+			return .Err(mError);
 		}
-		return result;
 	}
 
-	Result<KdlEvent, KdlParseError> ReadNext()
+	Result<KdlEvent, KdlFailure> ReadNext()
 	{
 		if (mState == .Start)
 		{
-			Try!(KdlChar.ValidateDocument(mInput, let start));
-			mPos = start;
+			switch (KdlChar.ValidateDocument(mInput, let start))
+			{
+			case .Ok:
+				mPos = start;
+			case .Err(let error):
+				mError = error;
+				return .Err(.());
+			}
 			mState = .Nodes;
 		}
 		while (true)
@@ -332,7 +346,7 @@ public class KdlReader
 	}
 
 	/// Consumes `/-` and the line-space after it, which must lead to something to comment out.
-	Result<void, KdlParseError> ReadSlashdash()
+	Result<void, KdlFailure> ReadSlashdash()
 	{
 		int start = mPos;
 		mPos += 2;
@@ -345,7 +359,7 @@ public class KdlReader
 	}
 
 	/// Reads a node's `(type)` and name.
-	Result<void, KdlParseError> ReadNodeHead()
+	Result<void, KdlFailure> ReadNodeHead()
 	{
 		mHasAnnotation = false;
 		if (mData[mPos] == '(')
@@ -363,7 +377,7 @@ public class KdlReader
 	}
 
 	/// Reads `( node-space* string node-space* )` into the annotation.
-	Result<void, KdlParseError> ReadAnnotation()
+	Result<void, KdlFailure> ReadAnnotation()
 	{
 		int start = mPos;
 		mPos++;
@@ -383,7 +397,7 @@ public class KdlReader
 	}
 
 	/// Reads an argument or a property: `value`, or `string node-space* = node-space* value`.
-	Result<KdlEvent, KdlParseError> ReadEntry()
+	Result<KdlEvent, KdlFailure> ReadEntry()
 	{
 		int start = mPos;
 		mHasAnnotation = false;
@@ -424,7 +438,7 @@ public class KdlReader
 	// Whitespace and comments
 
 	/// Skips `ws*` (Unicode spaces and `/* */` comments). @return Whether anything was skipped.
-	Result<bool, KdlParseError> SkipWhitespace()
+	Result<bool, KdlFailure> SkipWhitespace()
 	{
 		int begin = mPos;
 		while (mPos < mEnd)
@@ -446,7 +460,7 @@ public class KdlReader
 	}
 
 	/// Skips a `/* */` comment, which nests.
-	Result<void, KdlParseError> SkipBlockComment()
+	Result<void, KdlFailure> SkipBlockComment()
 	{
 		int start = mPos;
 		mPos += 2;
@@ -491,9 +505,15 @@ public class KdlReader
 
 	/// Skips `node-space*`: whitespace, and line continuations (`\` then a newline or `//` comment).
 	/// @return Whether anything was skipped.
-	Result<bool, KdlParseError> SkipNodeSpace()
+	Result<bool, KdlFailure> SkipNodeSpace()
 	{
-		bool any = false;
+		// Fast path: ASCII spaces and tabs, then anything that cannot continue node-space
+		int begin = mPos;
+		while (mPos < mEnd && (mData[mPos] == ' ' || mData[mPos] == '\t'))
+			mPos++;
+		if (mPos >= mEnd || !MayContinueSpace(mData[mPos]))
+			return mPos != begin;
+		bool any = mPos != begin;
 		while (true)
 		{
 			if (Try!(SkipWhitespace()))
@@ -520,8 +540,21 @@ public class KdlReader
 	}
 
 	/// Skips `line-space*`: node-space, newlines and `//` comments.
-	Result<void, KdlParseError> SkipLineSpace()
+	Result<void, KdlFailure> SkipLineSpace()
 	{
+		// Fast path: ASCII spaces, tabs, LF and CR, then anything that cannot continue line-space
+		while (mPos < mEnd)
+		{
+			char8 c = mData[mPos];
+			if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
+				break;
+			mPos++;
+		}
+		if (mPos >= mEnd)
+			return .Ok;
+		char8 next = mData[mPos];
+		if (!MayContinueSpace(next) && next != (char8)0x0B && next != (char8)0x0C)
+			return .Ok;
 		while (true)
 		{
 			Try!(SkipNodeSpace());
@@ -543,6 +576,14 @@ public class KdlReader
 	}
 
 	// Helpers
+
+	/// Whether whitespace, a comment or a line continuation may start with `c`, other than an ASCII
+	/// space or tab: `/`, `\`, or a lead byte of a non-ASCII space or newline (0xC2 and up).
+	[Inline]
+	static bool MayContinueSpace(char8 c)
+	{
+		return c == '/' || c == '\\' || (uint8)c >= 0xC2;
+	}
 
 	[Inline]
 	char8 PeekAt(int lookahead)
@@ -570,13 +611,15 @@ public class KdlReader
 		return KdlChar.IsIdentifierChar(KdlChar.Decode(mData, pos, var length));
 	}
 
-	KdlParseError Fail(KdlErrorKind kind, StringView message, int offset, int length = 1)
+	/// Records the error (Next reports it) and returns the token internal methods fail with.
+	KdlFailure Fail(KdlErrorKind kind, StringView message, int offset, int length = 1)
 	{
-		return KdlParseError.At(kind, message, mInput, offset, length);
+		mError = KdlParseError.At(kind, message, mInput, offset, length);
+		return .();
 	}
 
 	/// "Expected X, found Y" at the current position.
-	KdlParseError Unexpected(StringView expected)
+	KdlFailure Unexpected(StringView expected)
 	{
 		let message = scope String();
 		message.Append("Expected ");

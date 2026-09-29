@@ -322,7 +322,9 @@ The document builder consumes `KdlReader` events; the writer reuses `KdlCanonica
 and number formatting, and `KdlTester` switches to reading through the document (keeping the event
 path as a second mode, both checked by the suite script).
 
-**Phase 3 — Speed.**
+**Phase 3 — Speed.** *Mostly done: event pass 307–345 MB/s, document read 230–299, write
+327–532 on five of six inputs (`numbers`: 140/177/315); see `status.md`. Left: the property index,
+behind a lookup benchmark.*
 Join `bench/compare` (a `beef` harness like TomlBeef's, `KdlTester -bench`), then profile: SWAR scans,
 first-byte dispatch, number fast paths, arena strings, no per-token allocation. Targets on the
 benchmark inputs: document parse ≥ 150 MB/s, event reader ≥ 300 MB/s, canonical write ≥ 300 MB/s

@@ -37,6 +37,57 @@ internal static class KdlChar
 		return (uint8)c < 0x80 && sIdentifierAscii[(uint8)c];
 	}
 
+	/// Bytes that end a run of plain quoted-string text: `"`, `\`, the control characters up to CR
+	/// (newlines among them; a tab stops too, and the caller steps over it) and 0xC2 and 0xE2, the lead
+	/// bytes of NEL, LS and PS.
+	static bool[256] sQuotedStop = BuildQuotedStop();
+
+	static bool[256] BuildQuotedStop()
+	{
+		bool[256] table = default;
+		for (int i < 256)
+			table[i] = i == 0x22 || i == 0x5C || i < 0x0E || i == 0xC2 || i == 0xE2;
+		return table;
+	}
+
+	/// @brief Skip plain quoted-string text: bytes that cannot end the string, start an escape or be
+	/// a newline. Tested 8 bytes at a time; a word holding a candidate is walked byte by byte.
+	/// @param text The input.
+	/// @param pos Where to start.
+	/// @param end The end of the input.
+	/// @return The offset of the first stop byte (see sQuotedStop), or `end`.
+	public static int ScanQuotedText(char8* text, int pos, int end)
+	{
+		const uint64 ones = 0x0101010101010101UL;
+		const uint64 high = 0x8080808080808080UL;
+		uint8* data = (uint8*)text;
+		int i = pos;
+		while (true)
+		{
+			while (i + 8 <= end)
+			{
+				uint64 word = ?;
+				Internal.MemCpy(&word, data + i, 8);
+				// (w - n*ones) & ~w flags a byte below n; with w ^ c*ones, a byte equal to c. Either may
+				// also flag a byte after a real match, which only sends the word to the byte loop.
+				uint64 below = (word - 0x0E * ones) & ~word;
+				uint64 quote = word ^ (0x22 * ones);
+				uint64 backslash = word ^ (0x5C * ones);
+				uint64 c2 = word ^ (0xC2 * ones);
+				uint64 e2 = word ^ (0xE2 * ones);
+				uint64 equal = ((quote - ones) & ~quote) | ((backslash - ones) & ~backslash) | ((c2 - ones) & ~c2) | ((e2 - ones) & ~e2);
+				if (((below | equal) & high) != 0)
+					break;
+				i += 8;
+			}
+			int limit = Math.Min(i + 8, end);
+			while (i < limit && !sQuotedStop[data[i]])
+				i++;
+			if (i < limit || i >= end)
+				return i;
+		}
+	}
+
 	/// @brief Whether `cp` is `unicode-space`: tab, space, NBSP, U+1680, U+2000-200A, U+202F, U+205F, U+3000.
 	public static bool IsUnicodeSpace(char32 cp)
 	{
@@ -248,19 +299,9 @@ internal static class KdlChar
 		int i = start;
 		while (i < length)
 		{
-			// Words of printable ASCII (0x20-0x7E) need no further checks
-			while (i + 8 <= length)
-			{
-				uint64 word = ?;
-				Internal.MemCpy(&word, data + i, 8);
-				const uint64 ones = 0x0101010101010101UL;
-				const uint64 high = 0x8080808080808080UL;
-				uint64 below = (word - 0x20 * ones) & ~word;
-				uint64 del = word ^ (0x7F * ones);
-				if (((word | below | ((del - ones) & ~del)) & high) != 0)
-					break;
+			// Words of ASCII without banned control characters need no further checks
+			while (i + 8 <= length && IsPlainAsciiWord(data + i))
 				i += 8;
-			}
 			int limit = Math.Min(i + 8, length);
 			while (i < limit)
 			{
@@ -302,6 +343,36 @@ internal static class KdlChar
 			}
 		}
 		return .Ok;
+	}
+
+	/// Whether the 8 bytes at `p` are ASCII other than DEL and the control characters, tab, LF and CR
+	/// excepted (the bytes of indented text). Every test is exact per byte: once the high bits are known
+	/// to be clear, adding to a byte cannot carry into the next one.
+	[Inline]
+	static bool IsPlainAsciiWord(uint8* p)
+	{
+		const uint64 ones = 0x0101010101010101UL;
+		const uint64 high = 0x8080808080808080UL;
+		const uint64 low7 = 0x7F7F7F7F7F7F7F7FUL;
+		uint64 word = ?;
+		Internal.MemCpy(&word, p, 8);
+		if ((word & high) != 0)
+			return false;
+		// High bit set for bytes >= 0x20
+		uint64 printable = (word + 0x60 * ones) & high;
+		if (printable == high)
+			return (ZeroBytes(word ^ low7) & high) == 0;
+		uint64 control = ~printable & high;
+		uint64 allowed = ZeroBytes(word ^ (0x09 * ones)) | ZeroBytes(word ^ (0x0A * ones)) | ZeroBytes(word ^ (0x0D * ones));
+		return (control & ~allowed) == 0 && ZeroBytes(word ^ low7) == 0;
+	}
+
+	/// The high bit of each zero byte of `x`, exactly.
+	[Inline]
+	static uint64 ZeroBytes(uint64 x)
+	{
+		const uint64 low7 = 0x7F7F7F7F7F7F7F7FUL;
+		return ~(((x & low7) + low7) | x | low7);
 	}
 
 	static KdlParseError DisallowedError(StringView input, int offset, int length, uint32 cp)

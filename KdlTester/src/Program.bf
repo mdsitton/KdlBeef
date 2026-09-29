@@ -11,10 +11,39 @@ namespace KdlTester;
 ///                                canonical form; exit 1 with the error on stderr if it is invalid.
 ///                                By default through a KdlDocument; `-events` formats straight from
 ///                                the KdlReader's events (KdlCanonical.Format)
+///   KdlTester -bench <parse|events|write> <file> <min-samples>
+///                                the bench/compare harness (see bench/compare/run.sh): prints
+///                                `nodes: N`, then the median time of a document read (parse), a
+///                                pass of the reader over every event (events), or a canonical write
+///                                of the document (write, MB/s of output)
+///   KdlTester -bench-events <parse|write> <file> <min-samples>
+///                                the event reader's row in run.sh: parse is the events pass, write
+///                                exits 3 (n/a)
 class Program
 {
 	public static int Main(String[] args)
 	{
+		if (args.Count > 0 && (args[0] == "-bench" || args[0] == "-bench-events"))
+		{
+			int minSamples = 0;
+			if (args.Count >= 4 && int.Parse(args[3]) case .Ok(let parsed))
+				minSamples = parsed;
+			if (minSamples < 1)
+			{
+				Console.Error.WriteLine("usage: KdlTester -bench <parse|events|write> <file> <min-samples>");
+				return 2;
+			}
+			StringView mode = args[1];
+			if (args[0] == "-bench-events")
+			{
+				// run.sh's row for the event reader: it parses, and has no writer of its own
+				if (mode == "write")
+					return 3;
+				mode = "events";
+			}
+			return Bench(mode, args[2], minSamples);
+		}
+
 		bool events = false;
 		String path = null;
 		for (let arg in args)
@@ -69,6 +98,109 @@ class Program
 		Console.Out.Write(output);
 		Console.Out.Flush();
 		return 0;
+	}
+
+	static int Bench(StringView mode, StringView path, int minSamples)
+	{
+		let bytes = scope List<uint8>();
+		if (File.ReadAll(path, bytes) case .Err)
+		{
+			Console.Error.WriteLine($"cannot open {path}");
+			return 2;
+		}
+		StringView input = .((char8*)bytes.Ptr, bytes.Count);
+		let doc = scope KdlDocument();
+		if (doc.Read(input) case .Err(let error))
+		{
+			Console.Error.WriteLine($"parse error: {error}");
+			return 1;
+		}
+		Console.WriteLine($"nodes: {CountNodes(doc.Nodes)}");
+		Console.Out.Flush();
+
+		switch (mode)
+		{
+		case "parse":
+			// The document is reused, as an application re-reading a file would (its arena pools stay)
+			PrintResult(Measure(minSamples, scope () => { doc.Read(input).IgnoreError(); }), input.Length);
+		case "events":
+			let reader = scope KdlReader();
+			PrintResult(Measure(minSamples, scope () =>
+				{
+					reader.Reset(input);
+					while (reader.Next() case .Ok(let event) && event != .EndOfDocument) {}
+				}), input.Length);
+		case "write":
+			let output = scope String();
+			PrintResult(Measure(minSamples, scope () => { output.Clear(); doc.Write(output); }), output.Length);
+		default:
+			Console.Error.WriteLine($"unknown bench mode {mode}");
+			return 2;
+		}
+		return 0;
+	}
+
+	static int CountNodes(KdlNodeList nodes)
+	{
+		int count = 0;
+		for (let node in nodes)
+			count += 1 + CountNodes(node.Children);
+		return count;
+	}
+
+	struct Measurement
+	{
+		public double mMedianNs;
+		public int mSamples;
+		public bool mConverged;
+	}
+
+	/// The rule shared by every harness in bench/compare (see run.sh): warm up for at least 1 s (at least
+	/// one run), then time single runs until at least `minSamples` were taken and at least 60% of them lie
+	/// within ±10% of their median ("converged"), or 10 s of measuring or 1000 samples have passed. The
+	/// median sample is reported. (TomlTester's Measure.)
+	static Measurement Measure(int minSamples, delegate void() op)
+	{
+		let watch = scope System.Diagnostics.Stopwatch(true);
+		repeat
+			op();
+		while (watch.Elapsed.TotalSeconds < 1);
+
+		let samples = scope List<double>();
+		let sorted = scope List<double>();
+		watch.Restart();
+		while (true)
+		{
+			let t0 = watch.Elapsed.Ticks;
+			op();
+			samples.Add((watch.Elapsed.Ticks - t0) * 100.0); // TimeSpan ticks are 100 ns
+			sorted.Clear();
+			sorted.AddRange(samples);
+			sorted.Sort(scope (a, b) => a <=> b);
+			int n = sorted.Count;
+			double median = (n % 2 == 1) ? sorted[n / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+			if (n >= minSamples)
+			{
+				int within = 0;
+				for (let s in samples)
+				{
+					if (s >= median * 0.9 && s <= median * 1.1)
+						within++;
+				}
+				if (within >= 0.6 * n)
+					return .() { mMedianNs = median, mSamples = n, mConverged = true };
+			}
+			if (n >= 1000 || watch.Elapsed.TotalSeconds >= 10)
+				return .() { mMedianNs = median, mSamples = n, mConverged = false };
+		}
+	}
+
+	/// "<ms> ms/op <MB/s> MB/s (n=<samples>, converged|capped)", as bench/compare/c/bench.h prints it.
+	static void PrintResult(Measurement m, int bytes)
+	{
+		double ms = m.mMedianNs / 1e6;
+		double mbPerSecond = (double)bytes / 1048576.0 / (ms / 1000.0);
+		Console.WriteLine($"{ms:F3} ms/op {mbPerSecond:F1} MB/s (n={m.mSamples}, {m.mConverged ? "converged" : "capped"})");
 	}
 
 	/// Reads stdin as raw bytes (a BOM is kept: the reader must see it).

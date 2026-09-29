@@ -174,24 +174,29 @@ public class KdlDocument
 				current = id;
 			case .Argument, .Property:
 				// A node's entries all come before its children, so they are appended contiguously
-				KdlEntryRecord entry = default;
-				if (event == .Property)
-				{
-					entry.mKey = mStore.NewText(reader.Name);
-					entry.mFlags |= .IsProperty;
-				}
-				if (reader.HasAnnotation)
-				{
-					entry.mAnnotation = mStore.NewText(reader.Annotation);
-					entry.mFlags |= .HasAnnotation;
-				}
-				entry.mValue = mStore.OwnValue(reader.Value, false);
 				ref KdlNodeRecord node = ref mNodes[current];
 				if (node.mEntryCount == 0)
 					node.mEntryStart = (int32)mEntries.Count;
 				node.mEntryCount++;
 				node.mEntryCapacity = node.mEntryCount;
-				mEntries.Add(entry);
+				// Built in place: an entry record is 72 bytes
+				KdlEntryRecord* entry = mEntries.GrowUninitialized(1);
+				entry.mFlags = .None;
+				if (event == .Property)
+				{
+					entry.mKey = mStore.NewText(reader.Name);
+					entry.mFlags = .IsProperty;
+				}
+				else
+					entry.mKey = default;
+				if (reader.HasAnnotation)
+				{
+					entry.mAnnotation = mStore.NewText(reader.Annotation);
+					entry.mFlags |= .HasAnnotation;
+				}
+				else
+					entry.mAnnotation = default;
+				entry.mValue = mStore.OwnValue(reader.Value, false);
 			case .EndNode:
 				current = mNodeStack.PopBack();
 			case .EndOfDocument:
