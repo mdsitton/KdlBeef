@@ -149,6 +149,25 @@ Every string, key, annotation, float lexeme and big integer is copied into the d
 measured the page faults of fresh pools at up to 40% of parse time). A plain read drops integer
 lexemes (the canonical form writes integers in decimal); PreserveStyle will keep them.
 
+### Mutation
+
+`KdlNode.Mutation.bf` has the public operations, `KdlDocument.Mutation.bf` the table work:
+
+- Structure: `KdlDocument.AddNode`, `AddChild`, `InsertBefore`/`InsertAfter` (new siblings),
+  `MoveInto`/`MoveBefore`/`MoveAfter`/`MoveToTopLevel` (O(1) relinks; a move into the node's own
+  subtree or another document is refused), `Remove`. Removal unlinks the node and walks its subtree
+  through the links to flag every record `Removed`, so all their handles become invalid; the slots
+  stay until `Clear`.
+- Entries: `AddArgument` (optionally annotated), `SetArgument`, `RemoveArgument`, `SetProperty`
+  (changes the last property with the key, the one that counts, keeping its annotation and place;
+  appends otherwise; an overload sets the annotation), `RemoveProperty` (every duplicate),
+  `RemoveEntryAt`, `ClearEntries`. A node's entries stay contiguous: `AppendEntry` grows the range in
+  place when it is the last in the list or has spare capacity, and otherwise moves it to the end with
+  doubled capacity. Entry source ranges (Positions) move with their entries; added entries and nodes
+  have none.
+- Values passed in are copied into the document (`KdlDocumentStore.OwnValue`); a computed float
+  without a lexeme is written as its shortest round-trip form with `.0` for integral values.
+
 ### Configuration, limits and positions
 
 `KdlReadConfig` (TomlBeef's `TomlReadConfig` shape) carries the metadata mode, the source name and

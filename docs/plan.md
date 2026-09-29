@@ -334,7 +334,7 @@ benchmark inputs: document parse ≥ 150 MB/s, event reader ≥ 300 MB/s, canoni
 Located messages for every `_fail` case (golden files), collect-errors mode with recovery, Positions
 sidecar, resource limits, `Read(Stream)` through the buffered cursor (all input paths identical).
 
-**Phase 5 — PreserveStyle and mutation.**
+**Phase 5 — PreserveStyle and mutation.** *Mutation API done (`architecture.md` §4).*
 Trivia sidecar, slashdash structure, preserving writer, mutation API; every valid suite input
 round-trips byte for byte; edits keep neighboring formatting.
 

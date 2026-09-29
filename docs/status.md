@@ -6,12 +6,12 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 22/22 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 22/22 pass |
+| `beefbuild -test` (Debug checks) | 27/27 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 27/27 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In both modes (document, events): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 22/22 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 27/27 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 14 implementations on 6 inputs; results in `bench/compare/results.md` |
 
@@ -38,11 +38,11 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 |------|-------|
 | Pull reader (`KdlReader`) | Done: full KDL 2.0.0 grammar, validation (UTF-8, banned code points), slashdash, all string and number forms, located errors. See `docs/architecture.md` |
 | Canonical formatting (`KdlCanonical.Format`) | Done from events; byte-exact on the whole suite |
-| Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups, canonical `Write`; byte-exact on the whole suite. No mutation beyond names and annotations yet (phase 5), no property hash index yet |
+| Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups, canonical `Write`; byte-exact on the whole suite. Mutation: add, insert, move, remove nodes; add, set, remove arguments and properties (see `architecture.md` §4). No property hash index yet |
 | `KdlTester` | Prints the canonical form of a file or stdin through a document, or with `-events` straight from the reader; exit 1 on invalid input |
 | Read config, limits, positions | `KdlReadConfig`: source name, MaxDepth (256), MaxInputBytes, MaxNodes, MaxEntriesPerNode, MaxStringBytes (enforced by the reader, so for events too); `KdlMetadataMode.Positions` with `TryGetSourceRange` on nodes and entries |
 | Error messages | Located, with the source name; worded for the likely cause (`r"…"` is KDL 1, `#` inside an identifier, a slashdash after a type annotation, …); golden files for all 95 `_fail` cases |
-| Streams, collect-errors, PreserveStyle, mutation, `[KdlObject]` | Not started: see `docs/plan.md` §6 |
+| Streams, collect-errors, PreserveStyle, `[KdlObject]` | Not started: see `docs/plan.md` §6 |
 
 ## Open items
 
@@ -52,7 +52,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P4 | Rest of phase 4: collect-errors mode (open question 3), streams (`Read(Stream)`; the reader works on a contiguous buffer, see `plan.md` §1) | M |
-| P5 | Phase 5: PreserveStyle round trip and mutation API | L |
+| P5 | Rest of phase 5: PreserveStyle (trivia sidecar, slashdash structure, number/string formats, preserving writer, byte-exact round trip of the suite); mutation keeping neighboring formatting | L |
 | P6 | Phase 6: `[KdlObject]` typed mapping | M |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
