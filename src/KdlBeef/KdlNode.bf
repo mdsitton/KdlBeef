@@ -54,7 +54,16 @@ public struct KdlNode : IEquatable<KdlNode>
 	}
 
 	/// @brief Whether the handle refers to a node that is still in its document.
-	public bool IsValid => mDocument != null && mGeneration == mDocument.mGeneration && mDocument.IsLive(mId);
+	public bool IsValid => mDocument != null && mGeneration == mDocument.mGeneration && (mId == 0 || mDocument.IsLive(mId));
+	/// @brief Whether this is the document itself (KdlDocument.Root): no name or entries; its children
+	/// are the top-level nodes.
+	public bool IsDocumentRoot => mId == 0 && mDocument != null;
+
+	/// A handle to node `id`, or the invalid (default) handle for 0, which names no node here.
+	internal static KdlNode Of(KdlDocument document, uint32 id)
+	{
+		return id != 0 ? KdlNode(document, id) : default;
+	}
 	/// @brief The node's ID in its document.
 	public KdlNodeId Id => .(mId);
 	/// @brief The document the node belongs to.
@@ -70,7 +79,7 @@ public struct KdlNode : IEquatable<KdlNode>
 		}
 	}
 
-	KdlNode Link(uint32 id) => .(mDocument, id);
+	KdlNode Link(uint32 id) => Of(mDocument, id);
 
 	/// @brief The node's name.
 	public StringView Name
@@ -78,6 +87,8 @@ public struct KdlNode : IEquatable<KdlNode>
 		get => Record.mName;
 		set
 		{
+			if (mId == 0)
+				Runtime.FatalError("KdlNode: the document root has no name");
 			Record.mName = mDocument.mStore.NewText(value);
 			mDocument.MarkNode(mId, .NameDirty);
 		}
@@ -92,6 +103,8 @@ public struct KdlNode : IEquatable<KdlNode>
 	/// @param annotation The annotation text.
 	public void SetAnnotation(StringView annotation)
 	{
+		if (mId == 0)
+			Runtime.FatalError("KdlNode: the document root has no annotation");
 		ref KdlNodeRecord node = ref Record;
 		node.mAnnotation = mDocument.mStore.NewText(annotation);
 		node.mFlags |= .HasAnnotation;
@@ -265,9 +278,9 @@ public struct KdlNodeList : IEnumerable<KdlNode>
 	/// @brief Whether there are none.
 	public bool IsEmpty => mDocument.mNodes[mParent].mFirstChild == 0;
 	/// @brief The first node; invalid when there are none.
-	public KdlNode First => .(mDocument, mDocument.mNodes[mParent].mFirstChild);
+	public KdlNode First => KdlNode.Of(mDocument, mDocument.mNodes[mParent].mFirstChild);
 	/// @brief The last node; invalid when there are none.
-	public KdlNode Last => .(mDocument, mDocument.mNodes[mParent].mLastChild);
+	public KdlNode Last => KdlNode.Of(mDocument, mDocument.mNodes[mParent].mLastChild);
 
 	/// @brief The first node with the given name.
 	/// @param name The name.
@@ -281,7 +294,7 @@ public struct KdlNodeList : IEnumerable<KdlNode>
 				break;
 			id = mDocument.mNodes[id].mNextSibling;
 		}
-		return .(mDocument, id);
+		return KdlNode.Of(mDocument, id);
 	}
 
 	public Enumerator GetEnumerator() => .(mDocument, mDocument.mNodes[mParent].mFirstChild);

@@ -341,7 +341,7 @@ edits regenerate only what changed. Slashdashed content is kept as text, not par
 Trivia sidecar, slashdash structure, preserving writer, mutation API; every valid suite input
 round-trips byte for byte; edits keep neighboring formatting.
 
-**Phase 6 — `[KdlObject]`.**
+**Phase 6 — `[KdlObject]`.** *Done (`architecture.md` §6); the typed benchmark is still to do.*
 Port the TomlBeef generator with KDL roles; typed benchmark against kdl-rs serde, gokdl2 and KdlSharp.
 
 **Phase 7 — Extras as needed.** Streaming `KdlWriter`, KQL, v1 input, JSON-in-KDL.
@@ -382,6 +382,8 @@ Node 26, .NET 10, Python 3.14, GCC 16 + CMake, Zig 0.16 (downloaded by `fetch.sh
    is semantic (re-reading the output gives the same document) plus preserved comments and formats.
 7. ~~**Streams**~~ — decided (2026-09-29): TomlBeef's design: the reader generic over a cursor
    (`TomlParserImpl<TCursor>`), with `TomlBufferedStreamCursor` ported.
-4. **Typed mapping defaults** (§4.10): scalar fields as properties, object fields as child nodes —
-   agree before phase 6.
+4. ~~**Typed mapping defaults**~~ — decided (2026-09-29): scalar fields are properties (arguments by
+   `[KdlArgument(n)]`/`[KdlArguments]`); names are kebab-case by default (`OnClick` → `on-click`,
+   `TextBox` → `text-box`; `[KdlName]` and a policy override); `[KdlObject]` fields are child nodes,
+   lists of them repeated child nodes, `[KdlChildren]` takes every child dispatched by node name.
 5. **Unicode identifiers** in the UI markup: anything to restrict beyond the spec?

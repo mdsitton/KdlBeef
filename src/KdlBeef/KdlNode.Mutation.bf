@@ -14,7 +14,9 @@ extension KdlNode
 	/// @return The new node.
 	public KdlNode AddChild(StringView name)
 	{
-		CheckValid();
+		// The document root too: a top-level node
+		if (!IsValid)
+			Runtime.FatalError("KdlNode: the handle is invalid (no node, a removed node, or a cleared document)");
 		uint32 id = mDocument.NewNode(name, false, default);
 		mDocument.LinkLastChild(mId, id);
 		return .(mDocument, id);
@@ -83,7 +85,7 @@ extension KdlNode
 	public bool MoveBefore(KdlNode sibling)
 	{
 		CheckValid();
-		if (!sibling.IsValid || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
+		if (!sibling.IsValid || sibling.IsDocumentRoot || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
 			return false;
 		mDocument.Unlink(mId);
 		// Its indentation (and the comments before it) belonged to its old place
@@ -99,7 +101,7 @@ extension KdlNode
 	public bool MoveAfter(KdlNode sibling)
 	{
 		CheckValid();
-		if (!sibling.IsValid || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
+		if (!sibling.IsValid || sibling.IsDocumentRoot || sibling.mDocument != mDocument || mDocument.IsSelfOrAncestor(mId, sibling.mId))
 			return false;
 		mDocument.Unlink(mId);
 		// Its indentation (and the comments before it) belonged to its old place
@@ -133,6 +135,7 @@ extension KdlNode
 	/// @return Whether there is such an argument.
 	public bool SetArgument(int index, KdlValue value)
 	{
+		CheckValid();
 		int entry = FindArgument(index);
 		if (entry < 0)
 			return false;
@@ -177,6 +180,7 @@ extension KdlNode
 	/// @param value The value.
 	public void SetProperty(StringView key, KdlValue value)
 	{
+		CheckValid();
 		int entry = FindProperty(key);
 		if (entry >= 0)
 		{
@@ -194,6 +198,7 @@ extension KdlNode
 	/// @param annotation The annotation.
 	public void SetProperty(StringView key, KdlValue value, StringView annotation)
 	{
+		CheckValid();
 		int entry = FindProperty(key);
 		if (entry >= 0)
 		{
@@ -229,6 +234,7 @@ extension KdlNode
 	/// @param index The position.
 	public void RemoveEntryAt(int index)
 	{
+		CheckValid();
 		Runtime.Assert((uint)index < (uint)Record.mEntryCount, "KdlNode.RemoveEntryAt: index out of range");
 		mDocument.RemoveEntry(mId, index);
 	}
@@ -236,13 +242,70 @@ extension KdlNode
 	/// @brief Remove every argument and property.
 	public void ClearEntries()
 	{
+		CheckValid();
 		Record.mEntryCount = 0;
 	}
 
+	// For the typed mapping (KdlBind)
+
+	/// The position in Entries of the last property with `key`, or -1.
+	internal int PropertyIndex(StringView key)
+	{
+		int entry = FindProperty(key);
+		return entry < 0 ? -1 : entry - Record.mEntryStart;
+	}
+
+	/// The position in Entries of the argument at `index`, or -1.
+	internal int ArgumentIndex(int index)
+	{
+		int entry = FindArgument(index);
+		return entry < 0 ? -1 : entry - Record.mEntryStart;
+	}
+
+	/// Sets the argument at `index`, with an annotation when `hasAnnotation`, adding `#null`
+	/// arguments first if there are fewer.
+	internal void WriteArgument(int index, KdlValue value, bool hasAnnotation, StringView annotation)
+	{
+		CheckValid();
+		while (ArgumentCount < index)
+			AddArgument(.Null);
+		int entry = FindArgument(index);
+		if (entry < 0)
+		{
+			if (hasAnnotation)
+				AddArgument(value, annotation);
+			else
+				AddArgument(value);
+			return;
+		}
+		ref KdlEntryRecord record = ref mDocument.mEntries[entry];
+		record.mValue = mDocument.mStore.OwnValue(value, false);
+		if (hasAnnotation)
+		{
+			record.mAnnotation = mDocument.mStore.NewText(annotation);
+			record.mFlags |= .HasAnnotation;
+			mDocument.MarkEntry(entry, .ValueDirty | .PrefixDirty);
+		}
+		else
+			mDocument.MarkEntry(entry, .ValueDirty);
+	}
+
+	/// Changes the key of the property at `position` in Entries (an alias renamed on write).
+	internal void RenameProperty(int position, StringView key)
+	{
+		CheckValid();
+		int32 entry = Record.mEntryStart + (int32)position;
+		mDocument.mEntries[entry].mKey = mDocument.mStore.NewText(key);
+		mDocument.MarkEntry(entry, .PrefixDirty);
+	}
+
+	/// A node to change: valid, and not the document root (which has no name, entries or siblings).
 	[Inline]
 	void CheckValid()
 	{
 		if (!IsValid)
 			Runtime.FatalError("KdlNode: the handle is invalid (no node, a removed node, or a cleared document)");
+		if (mId == 0)
+			Runtime.FatalError("KdlNode: the document root has no name, entries or place to change");
 	}
 }

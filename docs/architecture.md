@@ -10,8 +10,8 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
   over text in memory or a `Stream` read through a buffer),
   a **document** built on it (`KdlDocument` with `KdlNode` handles) with canonical and
   style-preserving writers, and a **canonical formatter** that needs no document (`KdlCanonical`),
-  plus mutation, positions, resource limits and collect-errors; typed mapping (`[KdlObject]`) is the
-  next phase (`plan.md` §6).
+  plus mutation, positions, resource limits, collect-errors and compile-time typed mapping
+  (`[KdlObject]`).
 - **Strict.** Invalid KDL is rejected with a located `KdlParseError` (line, column, byte offset,
   length). Slashdashed content is validated like everything else.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
@@ -30,6 +30,11 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 | `KdlDocument.Style.bf` | `extension KdlDocument`: PreserveStyle's `KdlNodeStyle`/`KdlEntryStyle` records, capture during a read, the preserving writer, styled value regeneration |
 | `KdlDocument.Mutation.bf` | `extension KdlDocument`: `AddNode`, links, removal, entry growth and the per-entry side tables |
 | `KdlNode.Mutation.bf` | `extension KdlNode`: the public edits (structure, arguments, properties) |
+| `KdlObjectAttribute.bf` | `[KdlObject]`, `KdlNaming`, and the field attributes (`KdlName`, `KdlAlias`, `KdlIgnore`, `KdlRequired`, `KdlArgument`, `KdlArguments`, `KdlChild`, `KdlChildren`) |
+| `KdlSerializerCodeGen.bf` | The comptime generator behind `[KdlObject]` |
+| `KdlBind.bf` | `KdlValueRef`, `KdlValueWriter` and the runtime helpers the generated code calls |
+| `IKdlSerializable.bf` | `IKdlSerializable`, `IKdlConverter<T>`, `[KdlConverter]`, `[KdlUseConverter]` |
+| `KdlSerializer.bf` | `KdlSerializer.Read`/`ReadFile`/`Write`/`WriteFile` for whole documents |
 | `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
 | `KdlReader.bf` | `KdlEvent`; `KdlReader` (public: dispatches to an in-memory or a stream core); `KdlReaderCore<TCursor>`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments, line continuations and the window helpers |
 | `KdlReader.Values.bf` | `extension KdlReaderCore<TCursor>`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
@@ -310,3 +315,39 @@ sorted by key (ordinal), keeping the last of each duplicate. Formatting rules (`
 
 The canonical output of any valid document is a fixed point (formatting it again changes nothing);
 this holds for the HTML-standard benchmark document.
+
+## 6. Typed mapping (`[KdlObject]`)
+
+TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions in §9 question 4).
+
+- **Generation.** `[KdlObject]` is an `IComptimeTypeApply`: `KdlSerializerCodeGen.Emit` classifies
+  each public instance field at compile time and emits `KdlNodeName`, `KdlRead(KdlNode, allocator)`
+  and `KdlWrite(KdlNode)` into the type, plus `IKdlSerializable`. Emitted code is fully qualified,
+  reaches fields through `this.` and uses `_`-prefixed locals; enums are generated switches over their
+  (named) cases, so nothing needs reflection at run time. A `[KdlObject]` base's methods are hidden
+  (`new`) and called first. Unsupported field types, and roles on the wrong kind of field, stop the
+  build naming the field.
+- **Roles.** Scalars (bool, integers, floats, String, enums, converter types) are properties;
+  `[KdlArgument(n)]` an argument; `[KdlChild]` a `name value` child; `[KdlArguments] List` the
+  arguments from the first free one. `[KdlObject]` fields are child nodes named after the field;
+  `List<scalar>` a child holding the items as arguments; `List<[KdlObject]>` repeated children named
+  after the element type (`KdlObjectAttribute.Name`, or the type name through its naming);
+  `[KdlChildren] List<T>` every child no other field claims (a static `sKdlClaimed` list), dispatched
+  by node name to the concrete `[KdlObject]` types assignable to T found through
+  `Type.TypeDeclarations`, and written through `as IKdlSerializable` so each item's own type decides.
+  Names are kebab-case by default (`KdlNaming`), enum cases too.
+- **Whole documents** go through `KdlDocument.Root`, a valid handle for the document itself (no
+  name or entries; its children are the top-level nodes). There, properties are `name value`
+  children (`KdlBind` and `KdlValueWriter` redirect), so a config file reads `version 2`.
+- **Runtime (`KdlBind`).** `Find*` locate a value (the last property or child with a name wins;
+  `#null` is absent) as a `KdlValueRef` (value, annotation, node, entry), `To*` convert it with
+  range checks (uint64 up to 2^64-1 through big integers), and errors name the node and field and
+  are located at the entry or node (Positions; `KdlSerializer` raises the metadata mode to it).
+  Writes go through `KdlValueWriter` and update in place: `SetProperty` keeps an existing annotation,
+  arguments fill with `#null` up to their index, list items reuse the existing children by position
+  and trim the rest, `[KdlChildren]` items reuse an unclaimed child with the right name or insert one
+  there. A document read with PreserveStyle therefore keeps its comments and formatting.
+- **Converters** (`IKdlConverter<T>`, `[KdlConverter(typeof(T))]`, `[KdlUseConverter]`) read a
+  `KdlValueRef` (so they see the annotation: `(px)12`) and write through the `KdlValueWriter`.
+- **Ownership** as TomlBeef: a null String, object or List field gets a new instance on read (from the
+  allocator when one is given); replaced List items are deleted without an allocator.

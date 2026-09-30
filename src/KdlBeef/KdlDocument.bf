@@ -159,7 +159,17 @@ public class KdlDocument
 	/// @return The node, or an invalid handle if the ID is unknown or its node was removed.
 	public KdlNode GetNode(KdlNodeId id)
 	{
-		return .(this, IsLive(id.mValue) ? id.mValue : 0);
+		return IsLive(id.mValue) ? KdlNode(this, id.mValue) : default;
+	}
+
+	/// @brief The document itself as a node: no name or entries, the top-level nodes as its children
+	/// (`AddChild` adds one). [KdlObject] types read and write whole documents through it.
+	public KdlNode Root
+	{
+		get
+		{
+			return KdlNode(this, 0);
+		}
 	}
 
 	// Reading

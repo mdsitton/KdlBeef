@@ -54,7 +54,15 @@ public enum KdlErrorKind : uint8
 
 	// File I/O
 	/// Reading the input failed.
-	IoError
+	IoError,
+
+	// Typed mapping ([KdlObject])
+	/// A required property, argument or child is absent.
+	MissingValue,
+	/// A value has another type than its field.
+	WrongType,
+	/// A value has the right type but is not accepted (out of range, not a known name).
+	InvalidValue
 }
 
 /// A read error with location information for precise error reporting.
