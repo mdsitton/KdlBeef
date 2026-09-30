@@ -336,6 +336,26 @@ public static class KdlCanonical
 			radix = p[i + 1] == 'x' ? 16 : p[i + 1] == 'o' ? 8 : 2;
 			i += 2;
 		}
+		if (radix == 10)
+		{
+			// Already decimal: the digits without underscores and leading zeros, in linear time (the
+			// conversion below is quadratic in the length)
+			while (i < n && (p[i] == '0' || p[i] == '_'))
+				i++;
+			if (i == n)
+			{
+				output.Append('0');
+				return;
+			}
+			if (negative)
+				output.Append('-');
+			for (; i < n; i++)
+			{
+				if (p[i] != '_')
+					output.Append(p[i]);
+			}
+			return;
+		}
 		// Little-endian base-2^32 limbs: multiply-add each digit, then divide by 10^9 repeatedly
 		let limbs = scope List<uint32>();
 		for (; i < n; i++)

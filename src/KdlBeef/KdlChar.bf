@@ -10,6 +10,10 @@ namespace KdlBeef;
 /// UTF-8 sequences directly: every non-ASCII one starts with 0xC2, 0xE1, 0xE2, 0xE3 or 0xEF.
 internal static class KdlChar
 {
+	/// Number formatting that is KDL's whatever the current culture: `.` as the decimal point. Private
+	/// to KdlBeef, so no culture setting reaches it; read-only after construction.
+	internal static System.Globalization.NumberFormatInfo sNumberFormat = new .() ~ delete _;
+
 	/// Identifier characters among the ASCII bytes: 0x21-0x7E except `\ / ( ) { } ; [ ] " # =`.
 	static bool[128] sIdentifierAscii = BuildIdentifierAscii();
 

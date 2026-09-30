@@ -53,8 +53,13 @@ public struct KdlReadConfig
 	/// raised to 16. Setting it also makes KdlDocument.ReadFile stream the file through a buffer of
 	/// this size instead of loading it whole.
 	public int StreamBufferBytes = 0;
-	/// @brief Streams only: the longest construct (a node's head or an entry, with any comments inside
-	/// it; a string of any length) the reader may hold in memory at once. Longer ones grow the buffer,
-	/// bounded otherwise only by MaxInputBytes and MaxStringBytes. 0 = unlimited.
+	/// @brief Streams only: the most bytes the reader may hold at once for one construct (a node's head
+	/// or an entry, with any comments inside it; a string of any length), counted from the construct's
+	/// start through what the reader looks at to find its end (a few bytes of lookahead, at most one
+	/// code point, past the last byte). Longer constructs fail with ResourceLimitExceeded whatever the
+	/// buffer size: the buffer never grows past this, and StreamBufferBytes is lowered to it. Whitespace
+	/// and comments between nodes are not held. With PreserveStyle, the source text kept for the next
+	/// node (the comments and blank lines before it) counts too. 0 = unlimited (bounded only by
+	/// MaxInputBytes and MaxStringBytes).
 	public int MaxTokenBytes = 0;
 }

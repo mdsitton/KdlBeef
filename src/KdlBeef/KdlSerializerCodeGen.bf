@@ -81,31 +81,55 @@ public static class KdlSerializerCodeGen
 			write.Append("\tTry!(base.KdlWrite(_node));\n");
 		}
 
-		// The first argument no [KdlArgument] field takes, for [KdlArguments]; and the child names the
-		// fields claim, which [KdlChildren] leaves alone
+		// Over the whole [KdlObject] chain (a base's fields are read by its own KdlRead, called first, but
+		// they share the node): the first argument no [KdlArgument] field takes, for [KdlArguments]; and
+		// the child names the fields claim, which a [KdlChildren] list anywhere in the chain leaves alone
 		int nextArgument = 0;
 		let claimed = scope String();
 		int claimedCount = 0;
-		for (let field in type.GetFields())
+		int childrenLists = 0;
+		for (Type level = type; level != null && level.HasCustomAttribute<KdlObjectAttribute>(); level = level.IsValueType ? null : level.BaseType)
 		{
-			if (!IsSerialized(type, field))
-				continue;
-			if (field.GetCustomAttribute<KdlArgumentAttribute>() case .Ok(let argument))
-				nextArgument = Math.Max(nextArgument, argument.mIndex + 1);
-			else if (!field.HasCustomAttribute<KdlChildrenAttribute>() && !field.HasCustomAttribute<KdlArgumentsAttribute>())
+			var levelNaming = naming;
+			if (level != type && level.GetCustomAttribute<KdlObjectAttribute>() case .Ok(let attribute))
+				levelNaming = attribute.Naming;
+			for (let field in level.GetFields())
 			{
-				let names = scope List<String>();
-				defer { ClearAndDeleteItems!(names); }
-				ClaimedNames(field, naming, names);
-				for (let claim in names)
+				if (!IsSerialized(level, field))
+					continue;
+				if (field.GetCustomAttribute<KdlArgumentAttribute>() case .Ok(let argument))
+					nextArgument = Math.Max(nextArgument, argument.mIndex + 1);
+				else if (field.HasCustomAttribute<KdlChildrenAttribute>())
 				{
-					if (claimedCount++ > 0)
-						claimed.Append(", ");
-					AppendLiteral(claimed, claim);
+					if (++childrenLists > 1)
+						Fail(ownerName, field.Name, "only one [KdlChildren] list is allowed in a type and its [KdlObject] bases: both would read the same child nodes");
+				}
+				else if (!field.HasCustomAttribute<KdlArgumentsAttribute>())
+				{
+					let names = scope List<String>();
+					defer { ClearAndDeleteItems!(names); }
+					ClaimedNames(field, levelNaming, names);
+					for (let claim in names)
+					{
+						if (claimedCount++ > 0)
+							claimed.Append(", ");
+						AppendLiteral(claimed, claim);
+					}
 				}
 			}
 		}
-		bool claimsArray = false;
+		// The claimed names, as the [KdlChildren] code sees them: for a class through a virtual property,
+		// so that a base's list also leaves alone the children a subclass's fields claim
+		if (claimedCount > 0)
+			read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
+		StringView claimedExpr;
+		if (type.IsValueType)
+			claimedExpr = (claimedCount > 0) ? "sKdlClaimed" : "default";
+		else
+		{
+			claimedExpr = "this.KdlClaimedChildNames";
+			read.Insert(0, scope $"protected {baseIsObject ? "override" : "virtual"} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
+		}
 
 		for (let field in type.GetFields())
 		{
@@ -206,12 +230,6 @@ public static class KdlSerializerCodeGen
 				role = .Property;
 			}
 
-			if (role == .Children && !claimsArray)
-			{
-				claimsArray = true;
-				read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
-			}
-
 			switch (role)
 			{
 			case .Property, .Argument, .ChildValue:
@@ -229,8 +247,8 @@ public static class KdlSerializerCodeGen
 				EmitReadObjects(read, field.Name, rawName, elementName, required, fieldType, element);
 				EmitWriteObjects(write, field.Name, elementName, element);
 			case .Children:
-				EmitReadChildren(read, ownerName, field.Name, fieldType, element);
-				EmitWriteChildren(write, field.Name, element);
+				EmitReadChildren(read, ownerName, field.Name, fieldType, element, claimedExpr);
+				EmitWriteChildren(write, field.Name, element, claimedExpr);
 			case .ChildDictionary:
 				let elementName = (valueKind == .List && elementKind == .Object) ? AppendLiteral(.. scope .(), NodeName(element, .. scope .())) : "";
 				EmitReadDictionary(read, field.Name, key, aliases, required, fieldType, valueType, valueKind, valueConverter, element, elementKind, elementConverter, elementName, naming);
@@ -680,7 +698,7 @@ public static class KdlSerializerCodeGen
 			code.Append("\t\tint _from = 0;\n\t\tif (_found)\n\t\t{\n");
 		}
 		EmitReplaceList(code, "\t\t\t", name, listType, element);
-		code.Append("\t\t\tfor (int _i = _from; _i < KdlBeef.KdlBind.ArgumentCount(_args); _i++)\n\t\t\t{\n\t\t\t\tlet _r = KdlBeef.KdlBind.ArgumentAt(_args, _i);\n");
+		code.Append("\t\t\tfor (let _r in KdlBeef.KdlBind.Arguments(_args, _from))\n\t\t\t{\n");
 		EmitConvert(code, "\t\t\t\t", scope $"this.{name}", true, element, kind, converter, naming);
 		code.Append("\t\t\t}\n\t\t}\n\t}\n");
 	}
@@ -688,18 +706,22 @@ public static class KdlSerializerCodeGen
 	[Comptime]
 	static void EmitWriteScalarList(String code, StringView name, StringView key, List<String> aliases, Role role, int index, Type element, Kind kind, Type converter, KdlNaming naming)
 	{
+		// A null list removes what it maps (its arguments, or its child node), like a null String
 		code.Append("\t{\n");
 		if (role == .Arguments)
-			code.AppendF("\t\tif (this.{0} != null)\n\t\t{{\n\t\t\tlet _args = _node;\n\t\t\tint _i = {1};\n", name, index);
+			code.AppendF("\t\tvar _ac = KdlBeef.KdlArgumentCursor(_node, {});\n\t\tif (this.{} != null)\n\t\t{{\n", index, name);
 		else
 		{
 			for (let alias in aliases)
 				code.AppendF("\t\tKdlBeef.KdlBind.RenameChildAlias(_node, {}, {});\n", key, alias);
-			code.AppendF("\t\tif (this.{0} == null)\n\t\t\tKdlBeef.KdlBind.RemoveChild(_node, {1});\n\t\telse\n\t\t{{\n\t\t\tlet _args = KdlBeef.KdlBind.ChildNode(_node, {1});\n\t\t\tint _i = 0;\n", name, key);
+			code.AppendF("\t\tif (this.{0} == null)\n\t\t\tKdlBeef.KdlBind.RemoveChild(_node, {1});\n\t\telse\n\t\t{{\n\t\t\tvar _ac = KdlBeef.KdlArgumentCursor(KdlBeef.KdlBind.ChildNode(_node, {1}), 0);\n", name, key);
 		}
-		code.AppendF("\t\t\tfor (let _e in this.{})\n\t\t\t{{\n\t\t\t\tlet _w = KdlBeef.KdlValueWriter.Argument(_args, _i++);\n", name);
+		code.AppendF("\t\t\tfor (let _e in this.{})\n\t\t\t{{\n\t\t\t\tlet _w = _ac.Next();\n", name);
 		EmitSet(code, "\t\t\t\t", "_e", element, kind, converter, naming);
-		code.Append("\t\t\t}\n\t\t\tKdlBeef.KdlBind.TrimArguments(_args, _i);\n\t\t}\n\t}\n");
+		code.Append("\t\t\t}\n\t\t\t_ac.Trim();\n\t\t}\n");
+		if (role == .Arguments)
+			code.Append("\t\telse\n\t\t\t_ac.Trim();\n");
+		code.Append("\t}\n");
 	}
 
 	[Comptime]
@@ -750,18 +772,19 @@ public static class KdlSerializerCodeGen
 	[Comptime]
 	static void EmitWriteObjects(String code, StringView name, StringView elementName, Type element)
 	{
-		code.AppendF("\tif (this.{} != null)\n\t{{\n\t\tint _i = 0;\n\t\tfor (let _e in this.{})\n\t\t{{\n", name, name);
+		// Items into the existing children by position, then the rest removed; a null list removes them all
+		code.AppendF("\t{{\n\t\tvar _cc = KdlBeef.KdlChildCursor(_node, {});\n\t\tif (this.{} != null)\n\t\t{{\n\t\t\tfor (let _e in this.{})\n\t\t\t{{\n", elementName, name, name);
 		if (!element.IsValueType)
-			code.Append("\t\t\tif (_e == null)\n\t\t\t\tcontinue;\n");
-		code.AppendF("\t\t\tTry!(_e.KdlWrite(KdlBeef.KdlBind.NthChild(_node, {0}, _i++)));\n\t\t}}\n\t\tKdlBeef.KdlBind.TrimChildren(_node, {0}, _i);\n\t}}\n", elementName);
+			code.Append("\t\t\t\tif (_e == null)\n\t\t\t\t\tcontinue;\n");
+		code.Append("\t\t\t\tTry!(_e.KdlWrite(_cc.Next()));\n\t\t\t}\n\t\t}\n\t\t_cc.Trim();\n\t}\n");
 	}
 
 	[Comptime]
-	static void EmitReadChildren(String code, StringView ownerName, StringView name, Type listType, Type element)
+	static void EmitReadChildren(String code, StringView ownerName, StringView name, Type listType, Type element, StringView claimedExpr)
 	{
 		code.Append("\t{\n");
 		EmitReplaceList(code, "\t\t", name, listType, element);
-		code.Append("\t\tfor (let _c in _node.Children)\n\t\t{\n\t\t\tif (KdlBeef.KdlBind.IsClaimed(_c.Name, sKdlClaimed))\n\t\t\t\tcontinue;\n");
+		code.AppendF("\t\tfor (let _c in _node.Children)\n\t\t{{\n\t\t\tif (KdlBeef.KdlBind.IsClaimed(_c.Name, {}))\n\t\t\t\tcontinue;\n", claimedExpr);
 		// The item types are found when this method is compiled, not now: they may derive from the type
 		// being generated (a Container holding Rows and Columns), which is not complete yet
 		code.AppendF("\t\t\tSystem.Compiler.Mixin(KdlBeef.KdlSerializerCodeGen.ChildrenDispatch(typeof({}), ", element.GetFullName(.. scope .()));
@@ -869,7 +892,7 @@ public static class KdlSerializerCodeGen
 			else
 			{
 				// `key 1 2 3`: the entry's arguments
-				code.Append("\t\t\t\tfor (int _i < KdlBeef.KdlBind.ArgumentCount(_de))\n\t\t\t\t{\n\t\t\t\t\tlet _r = KdlBeef.KdlBind.ArgumentAt(_de, _i);\n");
+				code.Append("\t\t\t\tfor (let _r in KdlBeef.KdlBind.Arguments(_de, 0))\n\t\t\t\t{\n");
 				EmitConvert(code, "\t\t\t\t\t", "(*_dv)", true, element, elementKind, elementConverter, naming);
 				code.Append("\t\t\t\t}\n");
 			}
@@ -898,18 +921,19 @@ public static class KdlSerializerCodeGen
 				code.Append("\t\t\tif (_kv.value == null)\n\t\t\t\tKdlBeef.KdlBind.RemoveChild(_dn, _kv.key);\n\t\t\telse\n\t\t\t\tTry!(_kv.value.KdlWrite(KdlBeef.KdlBind.ChildNode(_dn, _kv.key)));\n");
 		case .List:
 			code.Append("\t\t\tif (_kv.value == null)\n\t\t\t{\n\t\t\t\tKdlBeef.KdlBind.RemoveChild(_dn, _kv.key);\n\t\t\t\tcontinue;\n\t\t\t}\n");
-			code.Append("\t\t\tlet _de = KdlBeef.KdlBind.ChildNode(_dn, _kv.key);\n\t\t\tint _i = 0;\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{\n");
+			code.Append("\t\t\tlet _de = KdlBeef.KdlBind.ChildNode(_dn, _kv.key);\n");
 			if (elementKind == .Object)
 			{
+				code.AppendF("\t\t\tvar _cc = KdlBeef.KdlChildCursor(_de, {});\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{{\n", elementName);
 				if (!element.IsValueType)
 					code.Append("\t\t\t\tif (_e == null)\n\t\t\t\t\tcontinue;\n");
-				code.AppendF("\t\t\t\tTry!(_e.KdlWrite(KdlBeef.KdlBind.NthChild(_de, {0}, _i++)));\n\t\t\t}}\n\t\t\tKdlBeef.KdlBind.TrimChildren(_de, {0}, _i);\n", elementName);
+				code.Append("\t\t\t\tTry!(_e.KdlWrite(_cc.Next()));\n\t\t\t}\n\t\t\t_cc.Trim();\n");
 			}
 			else
 			{
-				code.Append("\t\t\t\tlet _w = KdlBeef.KdlValueWriter.Argument(_de, _i++);\n");
+				code.Append("\t\t\tvar _ac = KdlBeef.KdlArgumentCursor(_de, 0);\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{\n\t\t\t\tlet _w = _ac.Next();\n");
 				EmitSet(code, "\t\t\t\t", "_e", element, elementKind, elementConverter, naming);
-				code.Append("\t\t\t}\n\t\t\tKdlBeef.KdlBind.TrimArguments(_de, _i);\n");
+				code.Append("\t\t\t}\n\t\t\t_ac.Trim();\n");
 			}
 		default:
 			code.Append("\t\t\tlet _w = KdlBeef.KdlValueWriter.Child(_dn, _kv.key);\n");
@@ -919,21 +943,22 @@ public static class KdlSerializerCodeGen
 	}
 
 	[Comptime]
-	static void EmitWriteChildren(String code, StringView name, Type element)
+	static void EmitWriteChildren(String code, StringView name, Type element, StringView claimedExpr)
 	{
-		code.AppendF("\tif (this.{} != null)\n\t{{\n\t\tint _i = 0;\n\t\tfor (let _e in this.{})\n\t\t{{\n", name, name);
+		// Items into the unclaimed children by position, then the rest removed; a null list removes them all
+		code.AppendF("\t{{\n\t\tvar _fc = KdlBeef.KdlFreeChildCursor(_node, {});\n\t\tif (this.{} != null)\n\t\t{{\n\t\t\tfor (let _e in this.{})\n\t\t\t{{\n", claimedExpr, name, name);
 		if (element.IsValueType)
-			code.Append("\t\t\tTry!(_e.KdlWrite(KdlBeef.KdlBind.FreeChild(_node, _i++, _e.KdlNodeName, sKdlClaimed)));\n");
+			code.Append("\t\t\t\tTry!(_e.KdlWrite(_fc.Next(_e.KdlNodeName)));\n");
 		else
 		{
 			// The item's own type decides its node name and fields: call through the interface, which
 			// dispatches on it (a [KdlObject] subclass hides its base's methods rather than overriding)
 			if (element.HasCustomAttribute<KdlObjectAttribute>())
-				code.Append("\t\t\tif (_e == null)\n\t\t\t\tcontinue;\n\t\t\tKdlBeef.IKdlSerializable _s = _e;\n");
+				code.Append("\t\t\t\tif (_e == null)\n\t\t\t\t\tcontinue;\n\t\t\t\tKdlBeef.IKdlSerializable _s = _e;\n");
 			else
-				code.Append("\t\t\tlet _s = _e as KdlBeef.IKdlSerializable;\n\t\t\tif (_s == null)\n\t\t\t\tcontinue;\n");
-			code.Append("\t\t\tTry!(_s.KdlWrite(KdlBeef.KdlBind.FreeChild(_node, _i++, _s.KdlNodeName, sKdlClaimed)));\n");
+				code.Append("\t\t\t\tlet _s = _e as KdlBeef.IKdlSerializable;\n\t\t\t\tif (_s == null)\n\t\t\t\t\tcontinue;\n");
+			code.Append("\t\t\t\tTry!(_s.KdlWrite(_fc.Next(_s.KdlNodeName)));\n");
 		}
-		code.Append("\t\t}\n\t\tKdlBeef.KdlBind.TrimFreeChildren(_node, _i, sKdlClaimed);\n\t}\n");
+		code.Append("\t\t\t}\n\t\t}\n\t\t_fc.Trim();\n\t}\n");
 	}
 }

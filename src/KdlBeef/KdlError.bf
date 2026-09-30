@@ -140,6 +140,19 @@ public struct KdlParseError
 		mSource = Store(sSourceBuffer.Value, source);
 	}
 
+	/// @brief Copy the message and source name into this thread's error buffers, so the error no longer
+	/// depends on where they were: needed for an error from KdlDocument.Errors (whose text the document
+	/// owns) that must outlive the document. Afterwards the error is like any other: valid until the next
+	/// error on this thread.
+	public void Detach() mut
+	{
+		mMessage = Store(sMessageBuffer.Value, mMessage);
+		let source = mSource;
+		mSource = default;
+		if (!source.IsEmpty)
+			mSource = Store(sSourceBuffer.Value, source);
+	}
+
 	/// @brief Formats the error as `source:line:column: message`, dropping the parts that are unknown
 	/// (no source name, or no position: line 0).
 	/// @param strBuffer The string to append to.

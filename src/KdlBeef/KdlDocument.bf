@@ -100,6 +100,9 @@ public class KdlDocument
 	String mIndentUnit ~ delete _;
 	/// Where the current preserving write started in its output.
 	int mWriteStart;
+	/// Preserving write: the node just written ended without a terminator (it was last before a `}` or
+	/// the end in the source), so a node written next needs one first.
+	bool mNeedTerminator;
 	/// Changes on every Clear and Read, so handles from before can tell they are stale.
 	internal uint32 mGeneration;
 	/// The reader behind Read, kept for its buffers.
@@ -186,7 +189,8 @@ public class KdlDocument
 	/// @param text The document (UTF-8; a leading BOM is skipped).
 	/// @param config Metadata, source name and limits.
 	/// @return .Ok, or the first error. The document is then empty; with config.CollectErrors it keeps
-	/// what could be read, and `Errors` lists every error.
+	/// what could be read, and `Errors` lists every error. Those errors' text belongs to the document
+	/// (valid until it is cleared, read again or deleted); KdlParseError.Detach copies it out.
 	public Result<void, KdlParseError> Read(StringView text, KdlReadConfig config)
 	{
 		let readerConfig = BeginRead(config);

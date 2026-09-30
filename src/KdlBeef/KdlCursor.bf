@@ -21,8 +21,13 @@ internal interface IKdlCursor
 	bool Fill(ref char8* data, ref int windowStart, ref int end, int keep, int pos, int count) mut;
 
 	/// An error of the input itself (I/O, encoding, size) that stopped Fill. The reader reports it in
-	/// place of its own once it has run into the end of what Fill delivered.
+	/// place of its own once it has run into the end of what Fill delivered. Making the error writes the
+	/// per-thread message buffer, so a pending error's text would be overwritten: to only ask whether
+	/// there is one, use HasInputError.
 	bool TryGetInputError(out KdlParseError error);
+
+	/// Whether the input has failed (TryGetInputError would make an error), without making one.
+	bool HasInputError { get; }
 
 	/// The 1-based line and column (in code points) of `offset`: always for in-memory input; for a
 	/// stream only from the earliest offset it still counts (the start of the current construct).
@@ -109,6 +114,12 @@ internal struct KdlByteCursor : IKdlCursor
 	{
 		error = default;
 		return false;
+	}
+
+	public bool HasInputError
+	{
+		[Inline]
+		get => false;
 	}
 
 	public bool LocatesOnlyForward
@@ -199,6 +210,10 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		mLocated = .(0);
 		state.mHasError = false;
 		int size = config.StreamBufferBytes > 0 ? Math.Max(config.StreamBufferBytes, 16) : 64 * 1024;
+		// Never more than MaxTokenBytes: a construct that would exceed it cannot fit the window, so reading
+		// it always comes to Fill, which checks it (a larger first buffer would hold it unchecked)
+		if (mMaxTokenBytes > 0)
+			size = Math.Min(size, Math.Max(mMaxTokenBytes, 4));
 		state.mBuffer.Count = size;
 	}
 
@@ -230,8 +245,19 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		int oldEnd = mBase + mValid;
 		while (mBase + mValid < pos + count && !mDone)
 		{
+			// The reader would hold the construct from `keep` through what it looks at (its lookahead
+			// included) at once: that is what MaxTokenBytes bounds, whatever the buffer's size
+			if (mMaxTokenBytes > 0 && pos + count - Math.Min(keep, pos) > mMaxTokenBytes)
+			{
+				SetError(.ResourceLimitExceeded, scope $"A token or entry is longer than MaxTokenBytes ({mMaxTokenBytes})", Math.Min(keep, pos) + mMaxTokenBytes);
+				break;
+			}
 			// Drop what the reader is done with, counting its lines first
 			int drop = Math.Min(keep, pos) - mBase;
+			// Never just after a CR: an LF may follow (not read yet, perhaps), and the line counter would
+			// count the two halves of the CRLF as two newlines. (The reader stops anywhere in whitespace.)
+			if (drop > 0 && Buffer[drop - 1] == '\r')
+				drop--;
 			if (drop > 0)
 			{
 				mLines.AdvanceTo(Buffer - mBase, Math.Max(mBase + drop, mLines.mPos), mBase + mRaw);
@@ -244,13 +270,18 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 			}
 			if (mRaw == mState.mBuffer.Count)
 			{
-				// One construct fills the buffer: grow it
+				// One construct fills the buffer: grow it, never past MaxTokenBytes. A full buffer of that
+				// size still short of `pos + count` means the construct (through the code point it needs
+				// whole) is longer than the limit.
 				if (mMaxTokenBytes > 0 && mRaw >= mMaxTokenBytes)
 				{
 					SetError(.ResourceLimitExceeded, scope $"A token or entry is longer than MaxTokenBytes ({mMaxTokenBytes})", mBase + mRaw);
 					break;
 				}
-				mState.mBuffer.Count = mState.mBuffer.Count * 2;
+				int grown = mState.mBuffer.Count * 2;
+				if (mMaxTokenBytes > 0)
+					grown = Math.Min(grown, mMaxTokenBytes);
+				mState.mBuffer.Count = grown;
 			}
 			ReadMore();
 			Validate();
@@ -269,7 +300,8 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 	/// Reads once into the free part of the buffer.
 	void ReadMore() mut
 	{
-		if (mDone)
+		// A full buffer reads nothing (a zero-length read would look like the end of the stream)
+		if (mDone || mRaw == mState.mBuffer.Count)
 			return;
 		switch (mStream.TryRead(.(mState.mBuffer.Ptr + mRaw, mState.mBuffer.Count - mRaw)))
 		{
@@ -327,6 +359,8 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		error = mState.mHasError ? mState.MakeError() : default;
 		return mState.mHasError;
 	}
+
+	public bool HasInputError => mState.mHasError;
 
 	public bool LocatesOnlyForward
 	{

@@ -171,6 +171,7 @@ extension KdlDocument
 		if (mHasBom)
 			output.Append("\u{FEFF}");
 		mWriteStart = output.Length;
+		mNeedTerminator = false;
 		uint32 id = mNodes[0].mFirstChild;
 		int depth = 0;
 		while (id != 0)
@@ -223,6 +224,13 @@ extension KdlDocument
 		ref KdlNodeRecord node = ref mNodes[id];
 		KdlNodeStyle style = id < (uint32)mNodeStyles.Count ? mNodeStyles[id] : default;
 		bool captured = style.mFlags.HasFlag(.Captured);
+		// The previous node's end, kept from a place where nothing followed it: separate the two, or
+		// they would read as one node (`a` then `b` as `ab`, or `b` as an argument of `a`)
+		if (mNeedTerminator)
+		{
+			output.Append('\n');
+			mNeedTerminator = false;
+		}
 		if (captured && !style.mFlags.HasFlag(.LeadingDirty))
 			output.Append(style.mLeading);
 		else
@@ -283,9 +291,49 @@ extension KdlDocument
 			}
 		}
 		if (style.mFlags.HasFlag(.Captured))
+		{
 			output.Append(style.mTail);
+			mNeedTerminator = !EndsWithTerminator(style.mTail);
+		}
 		else
+		{
 			output.Append('\n');
+			mNeedTerminator = false;
+		}
+	}
+
+	/// Whether a node's captured tail ends the node: it runs through the terminator (a newline, `;`, or
+	/// a `//` comment and its newline), so it ends with one unless the node was last before a `}` or
+	/// the end. A newline that ends a line continuation (`\`, spaces, an optional `//` comment) does not
+	/// count.
+	static bool EndsWithTerminator(StringView tail)
+	{
+		if (tail.IsEmpty)
+			return false;
+		if (tail[tail.Length - 1] == ';')
+			return true;
+		// The last code point: a newline?
+		int last = tail.Length - 1;
+		while (last > 0 && ((uint8)tail[last] & 0xC0) == 0x80)
+			last--;
+		if (!KdlChar.IsNewline(KdlChar.Decode(tail.Ptr, last, ?)))
+			return false;
+		if (last > 0 && tail[last] == '\n' && tail[last - 1] == '\r')
+			last--;
+		// The line it ends, from just after the previous newline: a line continuation if it starts with
+		// `\` after spaces
+		int start = 0;
+		int i = 0;
+		while (i < last)
+		{
+			char32 cp = KdlChar.Decode(tail.Ptr, i, let length);
+			i += length;
+			if (KdlChar.IsNewline(cp))
+				start = i;
+		}
+		StringView line = tail.Substring(start, last - start);
+		line.TrimStart();
+		return !line.StartsWith('\\');
 	}
 
 	void AppendIndent(String output, int depth)
@@ -349,9 +397,12 @@ extension KdlDocument
 			output.Append(digits[--count]);
 	}
 
-	/// Whether a raw string can hold `s`: one line, and no code point that must be escaped.
+	/// Whether a raw string can hold `s`: one line, no code point that must be escaped, and not starting
+	/// with two quotes (or being one), which would open it as `#"""`, a multi-line raw string.
 	static bool CanWriteRaw(StringView s)
 	{
+		if (s.StartsWith('"') && (s.Length == 1 || s[1] == '"'))
+			return false;
 		int i = 0;
 		while (i < s.Length)
 		{

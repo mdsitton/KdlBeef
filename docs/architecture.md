@@ -73,7 +73,12 @@ They call `Grow`, which calls `IKdlCursor.Fill`:
   (64 KiB by default, `StreamBufferBytes`) holding the window from the current construct on
   (`mRetain`: the node or entry being read; nothing between constructs). A refill counts the lines of
   the bytes it drops, moves the rest to the front and reads more; a construct longer than the buffer
-  doubles it, up to `MaxTokenBytes`. When the buffer moves, the event's views (`mName`,
+  doubles it. `MaxTokenBytes` is a hard limit on what one construct holds (from its start through
+  the reader's lookahead, `pos + count - keep` in `Fill`): the buffer starts no larger than it and
+  never grows past it, so a construct over the limit cannot fit the window and always reaches the
+  check. The whitespace loops store their local position into `mPos` at the window's end, so a
+  refill drops idle whitespace; a drop never splits a CRLF (the line counter would count two
+  newlines). When the buffer moves, the event's views (`mName`,
   `mAnnotation`, `mValue`, and `mEntryValue`, ReadEntry's key-or-argument kept as a field for this)
   are rebased onto it.
 
@@ -104,10 +109,17 @@ the error was in is restarted from its opening quote, `mStringStart`), comments,
 and balanced children blocks without checking them. A node whose `StartNode` was reported gets its
 `EndNode` next (`mEndAfterRecovery`); unclosed blocks at the end are reported once and then closed
 one `EndNode` per call (`mClosingAtEnd`); a stray `}` is dropped; an error at the same offset twice
-advances one byte, so recovery always progresses. `mSuppressed` is recounted from the frames.
+advances one byte, so recovery always progresses. `mSuppressed` is recounted from the frames, and a
+frame closed at the end with its slashdashed children block still open releases that block's
+suppression, so every reported `StartNode` gets its `EndNode`. Recovery runs before the error is
+returned and may refill a stream: it only notes an input failure (`HasInputError`), because making
+the input's error would overwrite the per-thread message buffer the pending error views; the input's
+error is reported on a later call.
 Encoding, I/O and resource-limit errors, and `MaxErrors` (100 by default), still stop the read
 (`IsStopped`). `KdlDocument` keeps what it read and copies each error's message into its store
-(`Errors`); `Read` returns the first. The suite runs a fourth time in this mode (first error = the
+(`Errors`); `Read` returns the first, whose text therefore lives with the document:
+`KdlParseError.Detach` copies it to the per-thread buffers, as `KdlSerializer` does before its
+scoped document goes. The suite runs a fourth time in this mode (first error = the
 golden one), and random mutations of the suite's inputs never crash or hang it.
 
 ### Positions and error locations
@@ -172,8 +184,10 @@ underscores on the stack.
   §4.6).
 - Integers accumulate in a uint64 with overflow detection: within int64 they are `Integer`,
   otherwise `BigInteger` with the token as written. Decimals with a fraction or exponent are `Float`
-  with the nearest double (from `Double.Parse` after removing underscores; out-of-range exponents
-  give ±infinity or zero) **and the token as written**, because the canonical form keeps the written
+  with the nearest double (from `Double.Parse` after removing underscores, with KdlBeef's own
+  `NumberFormatInfo`, `KdlChar.sNumberFormat`, so the culture's decimal separator never applies;
+  out-of-range exponents give ±infinity or zero, and a failed conversion is an error, not an
+  infinity) **and the token as written**, because the canonical form keeps the written
   mantissa (`1.0`, `1e10` → `1E+10`).
 - Quoted strings without escapes are views of the input; the first `\` switches to decoding into a
   buffer. Raw strings are always views (the first `"` followed by as many `#`s ends them).
@@ -275,7 +289,12 @@ valid mutations of the suite's inputs all round-trip.
   node or changed annotation regenerates that piece; a new children block is ` {` … `}` around the
   children, before the node's tail (so a trailing comment stays after `}`); a changed value
   (`ValueDirty`) keeps its original's form (`AppendStyledValue`: radix and hex case for integers;
-  quoted, raw or bare for strings); new entries are ` key=value`. Removing a node or entry removes its
+  quoted, raw or bare for strings; raw only when the value cannot open as `#"""`, i.e. does not
+  start with two quotes or equal one); new entries are ` key=value`. A kept tail ends with the node's
+  terminator unless the node was last before a `}` or the end (`EndsWithTerminator`: a final `;` or
+  newline that does not end a line continuation); when such a node is followed by a node after an
+  edit (a move), the writer adds a newline first (`mNeedTerminator`), or the two would read as one
+  node, or the second as the first's argument. Removing a node or entry removes its
   leading text (comments before it go with it). `WriteCanonical` gives the canonical form of any
   document.
 - Plain reads pay one predictable branch per event: speeds are unchanged. A PreserveStyle read runs
@@ -318,8 +337,8 @@ sorted by key (ordinal), keeping the last of each duplicate. Formatting rules (`
 - Strings are bare when `IsBareIdentifier` (identifier characters only, not number-like, not a bare
   keyword, not empty), else quoted with `\" \\ \b \f \n \r \t` and `\u{…}` for newlines and banned
   code points.
-- `Integer` in decimal; `BigInteger` converted from any radix with base-2^32 limbs and division by
-  10^9; `Float` from its lexeme (no underscores or `+`, leading zeros trimmed, `E` with an explicit
+- `Integer` in decimal; `BigInteger` written as written if decimal (without `+`, underscores and
+  leading zeros: linear), else converted from its radix with base-2^32 limbs and division by 10^9; `Float` from its lexeme (no underscores or `+`, leading zeros trimmed, `E` with an explicit
   sign), or `#inf`/`#-inf`/`#nan`, or the shortest round-trip double with `.0` for computed values.
 
 The canonical output of any valid document is a fixed point (formatting it again changes nothing);
@@ -367,7 +386,17 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   Writes go through `KdlValueWriter` and update in place: `SetProperty` keeps an existing annotation,
   arguments fill with `#null` up to their index, list items reuse the existing children by position
   and trim the rest, `[KdlChildren]` items reuse an unclaimed child with the right name or insert one
-  there. A document read with PreserveStyle therefore keeps its comments and formatting.
+  there. A document read with PreserveStyle therefore keeps its comments and formatting. Lists are
+  read and written in one pass (`KdlArgumentRefs`, and the cursors `KdlArgumentCursor`,
+  `KdlChildCursor`, `KdlFreeChildCursor`, which carry their position instead of finding item i from
+  the start: 64,000 items bind or write in 1-10 ms). A null list removes what it maps, like a null
+  String: its arguments, its child node, its item children, or a `[KdlChildren]` list's unclaimed
+  children; an empty list does the same.
+- **Inheritance.** A subclass's `KdlRead` calls its `[KdlObject]` base's first, and both see the same
+  node, so the claimed child names and the first free argument are computed over the whole chain,
+  each level with its own naming. A class's claimed names are a `protected virtual
+  KdlClaimedChildNames` property that subclasses override, so a base's `[KdlChildren]` list also
+  leaves alone the children a subclass's fields claim. One `[KdlChildren]` list per chain.
 - **Converters** (`IKdlConverter<T>`, `[KdlConverter(typeof(T))]`, `[KdlUseConverter]`) read a
   `KdlValueRef` (so they see the annotation: `(px)12`) and write through the `KdlValueWriter`.
 - **Ownership** as TomlBeef: a null String, object or List field gets a new instance on read (from the

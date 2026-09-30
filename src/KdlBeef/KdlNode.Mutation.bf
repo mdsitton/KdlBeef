@@ -278,6 +278,15 @@ extension KdlNode
 				AddArgument(value);
 			return;
 		}
+		WriteEntryValue(entry - Record.mEntryStart, value, hasAnnotation, annotation);
+	}
+
+	/// Sets the value of the entry at `position` in Entries (with an annotation when `hasAnnotation`),
+	/// keeping its key and place.
+	internal void WriteEntryValue(int position, KdlValue value, bool hasAnnotation, StringView annotation)
+	{
+		CheckValid();
+		int entry = Record.mEntryStart + position;
 		ref KdlEntryRecord record = ref mDocument.mEntries[entry];
 		record.mValue = mDocument.mStore.OwnValue(value, false);
 		if (hasAnnotation)

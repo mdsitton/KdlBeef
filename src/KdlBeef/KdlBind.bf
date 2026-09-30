@@ -35,7 +35,9 @@ public struct KdlValueWriter
 	{
 		Property,
 		Argument,
-		Child
+		Child,
+		/// The argument entry at position mIndex in Entries, or a new argument (mIndex -1)
+		Entry
 	}
 
 	KdlNode mNode;
@@ -82,6 +84,16 @@ public struct KdlValueWriter
 		return writer;
 	}
 
+	/// The argument entry at `position` in node.Entries, or with -1 a new argument (KdlArgumentCursor).
+	internal static KdlValueWriter Entry(KdlNode node, int position)
+	{
+		KdlValueWriter writer = default;
+		writer.mNode = node;
+		writer.mTarget = .Entry;
+		writer.mIndex = position;
+		return writer;
+	}
+
 	/// @brief Write `value`, keeping any annotation already there.
 	/// @param value The value.
 	public void Set(KdlValue value)
@@ -104,7 +116,7 @@ public struct KdlValueWriter
 		switch (mTarget)
 		{
 		case .Property: mNode.RemoveProperty(mName);
-		case .Argument: Write(.Null, false, default);
+		case .Argument, .Entry: Write(.Null, false, default);
 		case .Child: KdlBind.RemoveChild(mNode, mName);
 		}
 	}
@@ -124,6 +136,225 @@ public struct KdlValueWriter
 			mNode.WriteArgument(mIndex, value, hasAnnotation, annotation);
 		case .Child:
 			KdlBind.ChildNode(mNode, mName).WriteArgument(0, value, hasAnnotation, annotation);
+		case .Entry:
+			if (mNode.IsDocumentRoot)
+				Runtime.FatalError("[KdlObject] A document has no arguments: map the field with [KdlChild] or as a property");
+			if (mIndex >= 0)
+				mNode.WriteEntryValue(mIndex, value, hasAnnotation, annotation);
+			else if (hasAnnotation)
+				mNode.AddArgument(value, annotation);
+			else
+				mNode.AddArgument(value);
+		}
+	}
+}
+
+/// @brief A node's arguments from one position on, as KdlValueRefs, in one pass over its entries (for
+/// reading a List field). Used by generated code.
+public struct KdlArgumentRefs : IEnumerable<KdlValueRef>
+{
+	KdlNode mNode;
+	int mFrom;
+
+	internal this(KdlNode node, int from)
+	{
+		mNode = node;
+		mFrom = from;
+	}
+
+	public Enumerator GetEnumerator() => .(mNode, mFrom);
+
+	public struct Enumerator : IEnumerator<KdlValueRef>
+	{
+		KdlNode mNode;
+		KdlEntryList mEntries;
+		int mPosition;
+		int mSkip;
+
+		internal this(KdlNode node, int from)
+		{
+			mNode = node;
+			mEntries = node.IsDocumentRoot ? default : node.Entries;
+			mPosition = 0;
+			mSkip = from;
+		}
+
+		public Result<KdlValueRef> GetNext() mut
+		{
+			if (mNode.IsDocumentRoot)
+				return .Err;
+			while (mPosition < mEntries.Count)
+			{
+				let entry = mEntries[mPosition++];
+				if (!entry.IsArgument || mSkip-- > 0)
+					continue;
+				KdlValueRef value;
+				value.mNode = mNode;
+				value.mEntry = mPosition - 1;
+				value.mName = default;
+				value.mValue = entry.Value;
+				value.mHasAnnotation = entry.HasAnnotation;
+				value.mAnnotation = entry.Annotation;
+				return value;
+			}
+			return .Err;
+		}
+	}
+}
+
+/// @brief Writes a List field's items as a node's arguments from one position on, in one pass: each Next
+/// is the following existing argument (updated in place, so annotations and formatting stay) or a new
+/// one; Trim removes the arguments after the last one written. Used by generated code.
+public struct KdlArgumentCursor
+{
+	KdlNode mNode;
+	/// The entry position to look for the next argument from.
+	int mNext;
+	/// `#null` arguments still to add before the first item (the node had fewer than `from`).
+	int mMissing;
+
+	public this(KdlNode node, int from)
+	{
+		mNode = node;
+		mNext = 0;
+		mMissing = 0;
+		if (node.IsDocumentRoot)
+			return;
+		// Past the first `from` arguments
+		int skip = from;
+		let entries = node.Entries;
+		while (skip > 0 && mNext < entries.Count)
+		{
+			if (entries[mNext].IsArgument)
+				skip--;
+			mNext++;
+		}
+		mMissing = skip;
+	}
+
+	/// @brief Where the next item goes.
+	/// @return The writer for it.
+	public KdlValueWriter Next() mut
+	{
+		if (!mNode.IsDocumentRoot)
+		{
+			for (; mMissing > 0; mMissing--)
+				mNode.AddArgument(.Null);
+			let entries = mNode.Entries;
+			while (mNext < entries.Count)
+			{
+				if (entries[mNext].IsArgument)
+					return KdlValueWriter.Entry(mNode, mNext++);
+				mNext++;
+			}
+			// A new argument goes after every entry: look past it next time
+			mNext = entries.Count + 1;
+		}
+		return KdlValueWriter.Entry(mNode, -1);
+	}
+
+	/// @brief Remove the arguments after the last item written (list items no longer there).
+	public void Trim()
+	{
+		if (mNode.IsDocumentRoot)
+			return;
+		for (int position = mNode.Entries.Count - 1; position >= mNext; position--)
+		{
+			if (mNode.Entries[position].IsArgument)
+				mNode.RemoveEntryAt(position);
+		}
+	}
+}
+
+/// @brief Writes a List of [KdlObject]s as the child nodes named after the item type, in one pass: each
+/// Next is the following child with that name, or a new one after the last of them (or at the end);
+/// Trim removes those left over. Used by generated code.
+public struct KdlChildCursor
+{
+	KdlNode mNode;
+	StringView mName;
+	KdlNode mLast;
+	KdlNode mNext;
+
+	public this(KdlNode node, StringView name)
+	{
+		mNode = node;
+		mName = name;
+		mLast = default;
+		mNext = node.FirstChild;
+	}
+
+	/// @brief The node for the next item.
+	/// @return The child.
+	public KdlNode Next() mut
+	{
+		while (mNext.IsValid && mNext.Name != mName)
+			mNext = mNext.NextSibling;
+		if (mNext.IsValid)
+		{
+			mLast = mNext;
+			mNext = mNext.NextSibling;
+			return mLast;
+		}
+		// None left: every later child with the name has been used, so the new one goes after the last
+		mLast = mLast.IsValid ? mLast.InsertAfter(mName) : mNode.AddChild(mName);
+		return mLast;
+	}
+
+	/// @brief Remove the children with the name after the last item written.
+	public void Trim() mut
+	{
+		while (mNext.IsValid)
+		{
+			let child = mNext;
+			mNext = mNext.NextSibling;
+			if (child.Name == mName)
+				child.Remove();
+		}
+	}
+}
+
+/// @brief Writes a [KdlChildren] list in one pass: item i goes into the i-th child no other field claims
+/// if that child has the item's node name, else into a new child inserted there (or at the end); Trim
+/// removes the unclaimed children left over. Used by generated code.
+public struct KdlFreeChildCursor
+{
+	KdlNode mNode;
+	Span<StringView> mClaimed;
+	KdlNode mNext;
+
+	public this(KdlNode node, Span<StringView> claimed)
+	{
+		mNode = node;
+		mClaimed = claimed;
+		mNext = node.FirstChild;
+	}
+
+	/// @brief The node for the next item.
+	/// @param name The item's node name.
+	/// @return The child.
+	public KdlNode Next(StringView name) mut
+	{
+		while (mNext.IsValid && KdlBind.IsClaimed(mNext.Name, mClaimed))
+			mNext = mNext.NextSibling;
+		if (!mNext.IsValid)
+			return mNode.AddChild(name);
+		if (mNext.Name != name)
+			return mNext.InsertBefore(name);
+		let child = mNext;
+		mNext = mNext.NextSibling;
+		return child;
+	}
+
+	/// @brief Remove the unclaimed children after the last item written.
+	public void Trim() mut
+	{
+		while (mNext.IsValid)
+		{
+			let child = mNext;
+			mNext = mNext.NextSibling;
+			if (!KdlBind.IsClaimed(child.Name, mClaimed))
+				child.Remove();
 		}
 	}
 }
@@ -245,13 +476,13 @@ public static class KdlBind
 		return node.IsDocumentRoot ? 0 : node.ArgumentCount;
 	}
 
-	/// @brief The argument at `index`, which exists (for lists).
+	/// @brief The arguments from position `from` on, in one pass (for lists; none for the document root).
 	/// @param node The node.
-	/// @param index The argument's position.
-	/// @return The value.
-	public static KdlValueRef ArgumentAt(KdlNode node, int index)
+	/// @param from The first argument's position.
+	/// @return The arguments.
+	public static KdlArgumentRefs Arguments(KdlNode node, int from)
 	{
-		return Ref(node, node.ArgumentIndex(index), default);
+		return .(node, from);
 	}
 
 	/// @brief The child node `name` (the last one, if there are several, as the last property wins).
@@ -501,51 +732,7 @@ public static class KdlBind
 		}
 	}
 
-	/// @brief The child node named `name` at `index` among those (a list item), added after the last of
-	/// them (or at the end) when there are fewer.
-	/// @param node The node.
-	/// @param name The name.
-	/// @param index The position among the children named `name`.
-	/// @return The child.
-	public static KdlNode NthChild(KdlNode node, StringView name, int index)
-	{
-		int seen = 0;
-		KdlNode last = default;
-		for (let child in node.Children)
-		{
-			if (child.Name != name)
-				continue;
-			if (seen++ == index)
-				return child;
-			last = child;
-		}
-		return last.IsValid ? last.InsertAfter(name) : node.AddChild(name);
-	}
-
-	/// @brief Remove the children named `name` after the first `count` (list items no longer there).
-	/// @param node The node.
-	/// @param name The name.
-	/// @param count How many to keep.
-	public static void TrimChildren(KdlNode node, StringView name, int count)
-	{
-		int seen = 0;
-		for (let child in node.Children)
-		{
-			if (child.Name == name && seen++ >= count)
-				child.Remove();
-		}
-	}
-
-	/// @brief Remove the arguments after the first `count`.
-	/// @param node The node.
-	/// @param count How many to keep.
-	public static void TrimArguments(KdlNode node, int count)
-	{
-		while (node.ArgumentCount > count)
-			node.RemoveArgument(node.ArgumentCount - 1);
-	}
-
-	// [KdlChildren]
+	// [KdlChildren] (lists are written through KdlArgumentCursor, KdlChildCursor and KdlFreeChildCursor)
 
 	/// @brief Whether another field of the type claims child nodes named `name`.
 	/// @param name The name.
@@ -559,40 +746,6 @@ public static class KdlBind
 				return true;
 		}
 		return false;
-	}
-
-	/// @brief The node for item `index` of a [KdlChildren] list: the index-th unclaimed child if it has
-	/// the item's name, else a new child inserted there (or at the end).
-	/// @param node The node.
-	/// @param index The item's position.
-	/// @param name The item's node name.
-	/// @param claimed The names other fields use.
-	/// @return The child to write the item into.
-	public static KdlNode FreeChild(KdlNode node, int index, StringView name, Span<StringView> claimed)
-	{
-		int seen = 0;
-		for (let child in node.Children)
-		{
-			if (IsClaimed(child.Name, claimed))
-				continue;
-			if (seen++ == index)
-				return child.Name == name ? child : child.InsertBefore(name);
-		}
-		return node.AddChild(name);
-	}
-
-	/// @brief Remove the unclaimed children after the first `count` (items no longer in the list).
-	/// @param node The node.
-	/// @param count How many to keep.
-	/// @param claimed The names other fields use.
-	public static void TrimFreeChildren(KdlNode node, int count, Span<StringView> claimed)
-	{
-		int seen = 0;
-		for (let child in node.Children)
-		{
-			if (!IsClaimed(child.Name, claimed) && seen++ >= count)
-				child.Remove();
-		}
 	}
 
 	/// @brief The error for a child node no [KdlObject] type of a [KdlChildren] list is named after.

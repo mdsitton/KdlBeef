@@ -1,18 +1,18 @@
 # KdlBeef status
 
-Last reviewed: 2026-09-29.
+Last reviewed: 2026-09-30. The deep review and reproduced issues are in [review.md](review.md).
 
 ## Verification baseline
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 56/56 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 56/56 pass |
+| `beefbuild -test` (Debug checks) | 69/69 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 69/69 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 56/56 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 69/69 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 16 implementations on 6 inputs (knus on KDL v1 translations in `inputs/v1/`); results in `bench/compare/results.md`; `bench/compare/plot.py` redraws the README charts (`docs/benchmark*.svg`) from it and `typed-results.md` |
 
@@ -50,7 +50,7 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | Area | State |
 |------|-------|
 | Pull reader (`KdlReader`) | Done: full KDL 2.0.0 grammar, validation (UTF-8, banned code points), slashdash, all string and number forms, located errors; in-memory text or a `Stream` through a buffer (`KdlReaderCore<TCursor>`). See `docs/architecture.md` §3 |
-| Streams | `KdlReader.Reset(Stream)`, `KdlDocument.Read(Stream)`, `ReadFile` streaming with `StreamBufferBytes`; memory bounded by the buffer and the longest construct (`MaxTokenBytes`); same documents, errors and positions as in memory (the suite through a 16-byte buffer; tests with 1-byte reads, I/O failure, limits). End to end about 16% slower than in memory on the HTML standard |
+| Streams | `KdlReader.Reset(Stream)`, `KdlDocument.Read(Stream)`, `ReadFile` streaming with `StreamBufferBytes`; memory bounded by the buffer and the longest construct (`MaxTokenBytes`, a hard limit whatever the buffer size; whitespace between constructs is not held); same documents, errors and positions as in memory (the suite through a 16-byte buffer; tests with 1-byte reads, I/O failure, limits). End to end about 16% slower than in memory on the HTML standard |
 | Canonical formatting (`KdlCanonical.Format`) | Done from events; byte-exact on the whole suite |
 | Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups (typed getters with fallbacks, chainable `Find`, `Children.Named`, `Descendants`), canonical `Write`; byte-exact on the whole suite. Mutation: add, insert, move, remove nodes; add, set, remove arguments and properties (see `architecture.md` §4). No property hash index yet |
 | `KdlTester` | Prints the canonical form of a file or stdin through a document, with `-events` straight from the reader, with `-stream N` through a Stream and an N-byte buffer; exit 1 on invalid input; `-bench` for `bench/compare` |
@@ -66,6 +66,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 | ID | Item | Size |
 |----|------|------|
+| R | [Deep review](review.md) follow-ups (R1-R9, the quadratic typed lists, decimal big integers and idle-whitespace retention are fixed, see its *Resolution*): `MaxStringBytes` and non-streaming `ReadFile` as strict allocation budgets; the reader-invariant and serializer-descriptor refactors; generation checks for saved `Children`/`Entries` views; compile-time rejection of duplicate or negative argument indices and overlapping roles; dictionary writes still look up each key's node by a scan (quadratic in very large dictionaries) | M |
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
 | P6 | `[KdlObject]` limits: `List<List<T>>`, dictionaries of dictionaries or of `List<List<T>>`, and non-String keys are not supported | S |
@@ -73,7 +74,8 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 ## Suggested order
 
-Everything in the plan's must-have scope is done. What is left is refinement (P3, P5, P6 rows) and
-more lookup API if the UI framework asks for it (phase 7's KQL, JSON-in-KDL, v1 input and streaming
-writer are dropped, `plan.md` §6), to pick up
-when the UI framework needs them.
+The plan's must-have features are implemented, and the deep review's confirmed bugs (R1-R9) and
+measured quadratic paths are fixed, each with a regression test (`tests/KdlReviewTests.bf`). The
+review's remaining recommendations (the R row) and the planned refinements (P3, P5, P6) and more
+lookup API can follow as the UI framework needs them. Phase 7's KQL, JSON-in-KDL, v1 input and streaming writer remain dropped
+(`plan.md` §6).

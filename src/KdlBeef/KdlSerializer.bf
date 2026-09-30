@@ -22,7 +22,7 @@ public static class KdlSerializer
 	public static Result<void, KdlParseError> Read<T>(StringView text, T target, KdlReadConfig config = .(), ITypedAllocator allocator = null) where T : class, IKdlSerializable
 	{
 		let doc = scope KdlDocument();
-		Try!(doc.Read(text, WithPositions(config)));
+		Try!(Detached(doc.Read(text, WithPositions(config))));
 		return target.KdlRead(doc.Root, allocator);
 	}
 
@@ -35,7 +35,7 @@ public static class KdlSerializer
 	public static Result<void, KdlParseError> Read<T>(StringView text, ref T target, KdlReadConfig config = .(), ITypedAllocator allocator = null) where T : struct, IKdlSerializable
 	{
 		let doc = scope KdlDocument();
-		Try!(doc.Read(text, WithPositions(config)));
+		Try!(Detached(doc.Read(text, WithPositions(config))));
 		return target.KdlRead(doc.Root, allocator);
 	}
 
@@ -49,7 +49,7 @@ public static class KdlSerializer
 	public static Result<void, KdlParseError> ReadFile<T>(StringView path, T target, KdlReadConfig config = .(), ITypedAllocator allocator = null) where T : class, IKdlSerializable
 	{
 		let doc = scope KdlDocument();
-		Try!(doc.ReadFile(path, WithPositions(config)));
+		Try!(Detached(doc.ReadFile(path, WithPositions(config))));
 		return target.KdlRead(doc.Root, allocator);
 	}
 
@@ -78,6 +78,18 @@ public static class KdlSerializer
 		{
 			var error = KdlParseError(.IoError, "Cannot write the file", 0, 0, 0, 0);
 			error.SetSource(path);
+			return .Err(error);
+		}
+		return .Ok;
+	}
+
+	/// A read's error made independent of the scoped document about to be destroyed: with CollectErrors
+	/// its message and source name are the document's own text.
+	static Result<void, KdlParseError> Detached(Result<void, KdlParseError> result)
+	{
+		if (result case .Err(var error))
+		{
+			error.Detach();
 			return .Err(error);
 		}
 		return .Ok;

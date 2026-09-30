@@ -77,7 +77,8 @@ public class KdlReader
 
 	/// @brief Create a reader over `input` with limits and a source name.
 	/// @param input The document text (UTF-8; a leading BOM is skipped).
-	/// @param config The limits and source name (MetadataMode is ignored).
+	/// @param config The limits and source name. MetadataMode matters only as PreserveStyle, which makes
+	/// the reader keep each event's source text (for KdlDocument; it holds more of a stream at once).
 	public this(StringView input, KdlReadConfig config) : this()
 	{
 		Reset(input, config);
@@ -93,8 +94,8 @@ public class KdlReader
 
 	/// @brief Start reading `input` from the beginning, reusing the reader's buffers.
 	/// @param input The document text (UTF-8; a leading BOM is skipped).
-	/// @param config The limits and source name (MetadataMode is ignored). The source name is only
-	/// viewed: it must outlive the read.
+	/// @param config The limits and source name (MetadataMode: see the constructor). The source name is
+	/// only viewed: it must outlive the read.
 	public void Reset(StringView input, KdlReadConfig config)
 	{
 		mStreaming = false;
@@ -113,7 +114,7 @@ public class KdlReader
 	/// `config.MaxTokenBytes`).
 	/// @param stream The document (UTF-8; a leading BOM is skipped); read from its current position,
 	/// and must outlive the reader's use of it.
-	/// @param config The limits, buffer size and source name (MetadataMode is ignored).
+	/// @param config The limits, buffer size and source name (MetadataMode: see the constructor).
 	public void Reset(Stream stream, KdlReadConfig config)
 	{
 		mStreaming = true;
@@ -754,6 +755,11 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		mState = .Nodes;
 		mEventOffset = frame.mStart;
 		mEventEnd = mLastTokenEnd;
+		// A slashdashed children block still open (closed at the end during recovery; normally its `}`
+		// clears this): its suppression ends with the node, or the node's own EndNode and its
+		// ancestors' would be suppressed too
+		if (frame.mChildrenSlashdashed)
+			mSuppressed--;
 		if (frame.mSlashdashed)
 		{
 			mSuppressed--;
@@ -1020,8 +1026,19 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		// position, so the loop does not store mPos on every byte)
 		int begin = mPos;
 		int p = mPos;
-		while (Avail(p) && (mData[p] == ' ' || mData[p] == '\t'))
+		while (true)
+		{
+			// At the window's end, store the position first: a refill keeps only bytes from mPos on
+			if (p >= mEnd)
+			{
+				mPos = p;
+				if (!Grow(p, 1))
+					break;
+			}
+			if (mData[p] != ' ' && mData[p] != '\t')
+				break;
 			p++;
+		}
 		mPos = p;
 		if (!Avail(p) || !MayContinueSpace(mData[p]))
 			return p != begin;
@@ -1063,8 +1080,15 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		// Fast path: ASCII spaces, tabs, LF and CR, then anything that cannot continue line-space (a
 		// local position, so the loop does not store mPos on every byte)
 		int p = mPos;
-		while (Avail(p))
+		while (true)
 		{
+			// At the window's end, store the position first: a refill keeps only bytes from mPos on
+			if (p >= mEnd)
+			{
+				mPos = p;
+				if (!Grow(p, 1))
+					break;
+			}
 			char8 c = mData[p];
 			if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
 				break;
@@ -1127,8 +1151,10 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			RebaseViews(oldData, oldBase, oldEnd);
 		if (!grew)
 		{
-			// Nothing new: still short (Grow is only asked when it is), so a constant for in-memory input
-			if (mCursor.TryGetInputError(?))
+			// Nothing new: still short (Grow is only asked when it is), so a constant for in-memory input.
+			// Only note the failure: recovery grows too, while the error it is about to return views the
+			// per-thread message buffer that making the input's error would overwrite
+			if (mCursor.HasInputError)
 				mInputFailed = true;
 			return false;
 		}
@@ -1313,7 +1339,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	/// Fail at a position located earlier (line 0: locate it now, as Fail does).
 	KdlFailure FailAt(KdlErrorKind kind, StringView message, int offset, int line, int column, int length = 1)
 	{
-		if (line == 0 || (mInputFailed && mCursor.TryGetInputError(?)))
+		if (line == 0 || (mInputFailed && mCursor.HasInputError))
 			return Fail(kind, message, offset, length);
 		mError = KdlParseError(kind, message, line, column, offset, length);
 		if (!mConfig.SourceName.IsEmpty)

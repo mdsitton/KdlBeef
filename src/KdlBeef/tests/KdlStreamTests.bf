@@ -10,7 +10,7 @@ static class KdlStreamTests
 {
 	/// A stream over text that returns at most `chunk` bytes per read, and fails once `failAt` bytes
 	/// have been read (if set).
-	class TrickleStream : Stream
+	public class TrickleStream : Stream
 	{
 		StringView mData;
 		int mPos;

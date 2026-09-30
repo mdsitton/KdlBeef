@@ -152,7 +152,6 @@ extension KdlReaderCore<TCursor>
 
 		// decimal := sign? integer ('.' integer)? exponent?, integer := digit (digit | '_')*
 		bool isFloat = false;
-		int exponentSign = 0;
 		if (!KdlChar.IsDigit(p[i]))
 			return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: a decimal point must have a digit before it (`0.5`)", offset, n));
 		i = SkipDigits(p, i, n);
@@ -169,10 +168,7 @@ extension KdlReaderCore<TCursor>
 			isFloat = true;
 			i++;
 			if (i < n && (p[i] == '+' || p[i] == '-'))
-			{
-				exponentSign = p[i] == '-' ? -1 : 1;
 				i++;
-			}
 			if (i >= n || !KdlChar.IsDigit(p[i]))
 				return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: an exponent must have digits", offset, n));
 			i = SkipDigits(p, i, n);
@@ -210,18 +206,15 @@ extension KdlReaderCore<TCursor>
 			}
 			digits = .(clean, length);
 		}
-		double value;
-		switch (double.Parse(digits))
+		// KDL's `.`, whatever the current culture's decimal separator. Out of range is not a failure: the
+		// parse gives ±infinity or ±0 (and the lexeme is kept); a failure would be a bug, not an overflow
+		switch (double.Parse(digits, KdlChar.sNumberFormat))
 		{
 		case .Ok(let parsed):
-			value = parsed;
+			return .Ok(.Float(parsed, token));
 		case .Err:
-			// Out of range: the lexeme is kept, and the double is its limit
-			value = exponentSign < 0 ? 0.0 : double.PositiveInfinity;
-			if (negative)
-				value = -value;
+			return .Err(Fail(.InvalidNumber, scope $"The number `{token}` could not be converted to a double", offset, n));
 		}
-		return .Ok(.Float(value, token));
 	}
 
 	/// One-pass parse of an optional sign and 1–18 decimal digits (leading zeros allowed, as in KDL):
