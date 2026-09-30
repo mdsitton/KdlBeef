@@ -345,6 +345,18 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   by node name to the concrete `[KdlObject]` types assignable to T found through
   `Type.TypeDeclarations`, and written through `as IKdlSerializable` so each item's own type decides.
   Names are kebab-case by default (`KdlNaming`), enum cases too.
+- **Dictionaries.** A `Dictionary<String, T>` field is a child node named after the field whose
+  children are the entries, each named by its key exactly as written (no naming policy): `key value`
+  for a scalar T (`key #null` is skipped), the object's node for a `[KdlObject]` T, `key 1 2 3` for
+  a `List<scalar>`, and `key { item …; item … }` for a `List<[KdlObject]>`. Children rather than
+  properties, so every value type, annotations and any key fit one shape. Reading replaces the
+  contents (deleting owned keys and values on a heap read), adds each entry through `TryAddAlt` (the
+  key String is allocated only for a new key; a duplicate key's old value is deleted, so the last one
+  wins) and reads the value in place through the value pointer. Writing works in place:
+  `RemoveMissingKeys` drops entry nodes whose keys are gone (and all but the last duplicate), kept
+  entries are rewritten where they are (comments and number bases stay), new keys are appended in
+  the dictionary's iteration order. Other key types, dictionaries of dictionaries and of lists of
+  lists stop the build.
 - **Whole documents** go through `KdlDocument.Root`, a valid handle for the document itself (no
   name or entries; its children are the top-level nodes). There, properties are `name value`
   children (`KdlBind` and `KdlValueWriter` redirect), so a config file reads `version 2`.

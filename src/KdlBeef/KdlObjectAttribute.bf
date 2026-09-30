@@ -29,6 +29,8 @@ namespace KdlBeef;
 /// - another [KdlObject] type: a child node named after the field;
 /// - List<scalar>: a child node named after the field, holding the items as its arguments;
 /// - List<[KdlObject] type>: repeated child nodes named after the element type (`item` for `Item`);
+/// - Dictionary<String, T> of the above: a child node named after the field with one child per entry,
+///   named by its key as written: `env { PATH "/bin" }`, `servers { main host=h port=1 }`;
 /// - [KdlChildren] List<T>: every child node not claimed by another field, each read as the
 ///   [KdlObject] type assignable to T whose node name it has (found at compile time).
 ///

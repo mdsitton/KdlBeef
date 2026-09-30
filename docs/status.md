@@ -6,13 +6,13 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 52/52 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 52/52 pass |
+| `beefbuild -test` (Debug checks) | 56/56 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 56/56 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 52/52 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 56/56 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 16 implementations on 6 inputs (knus on KDL v1 translations in `inputs/v1/`); results in `bench/compare/results.md`; `bench/compare/plot.py` redraws the README charts (`docs/benchmark*.svg`) from it and `typed-results.md` |
 
@@ -58,7 +58,7 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | Error messages | Located, with the source name; worded for the likely cause (`r"…"` is KDL 1, `#` inside an identifier, a slashdash after a type annotation, …); golden files for all 95 `_fail` cases |
 | Collect-errors | `KdlReadConfig.CollectErrors` (opt-in) and `MaxErrors`: the reader reports every error and skips each broken node; `KdlDocument` keeps what it read and lists `Errors`. Suite-checked and fuzzed (no crash or hang) |
 | PreserveStyle | `KdlMetadataMode.PreserveStyle`: unchanged documents write back byte for byte (round-trip script, fuzzed); edits regenerate only what changed (values keep radix and quoting; new nodes follow the document's indentation); `WriteCanonical` for the canonical form. See `architecture.md` §4 |
-| `[KdlObject]` | Compile-time typed mapping with KDL roles (properties, arguments, child values, child objects, repeated children, polymorphic `[KdlChildren]`), kebab-case naming, enums, converters seeing annotations, aliases, required fields, allocators, in-place updates of PreserveStyle documents, whole documents through `KdlDocument.Root` and `KdlSerializer`. See `architecture.md` §6 |
+| `[KdlObject]` | Compile-time typed mapping with KDL roles (properties, arguments, child values, child objects, repeated children, polymorphic `[KdlChildren]`, `Dictionary<String, T>` as a node of keyed children), kebab-case naming, enums, converters seeing annotations, aliases, required fields, allocators, in-place updates of PreserveStyle documents, whole documents through `KdlDocument.Root` and `KdlSerializer`. See `architecture.md` §6 |
 
 ## Open items
 
@@ -68,7 +68,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
-| P6 | `[KdlObject]` limits: `List<List<T>>` and dictionaries are not supported | S |
+| P6 | `[KdlObject]` limits: `List<List<T>>`, dictionaries of dictionaries or of `List<List<T>>`, and non-String keys are not supported | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order

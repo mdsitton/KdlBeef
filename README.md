@@ -47,6 +47,7 @@ Typed, generated at compile time:
 [KdlObject] class Panel : Widget
 {
     [KdlChildren] public List<Widget> Items ~ DeleteContainerAndItems!(_);   // button …, panel …
+    public Dictionary<String, String> Data ~ DeleteDictionaryAndKeysAndValues!(_);  // data { user-id "42" }
 }
 
 let panel = scope Panel();

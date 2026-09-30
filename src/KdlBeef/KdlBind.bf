@@ -301,6 +301,39 @@ public static class KdlBind
 		return true;
 	}
 
+	/// @brief The value of a dictionary entry node (`key value`): its first argument.
+	/// @param entry The entry node.
+	/// @param value Receives the value when it is there.
+	/// @return Whether it is there (`#null` counts as absent), or the error when the node has no argument.
+	public static Result<bool, KdlParseError> EntryValue(KdlNode entry, out KdlValueRef value)
+	{
+		value = default;
+		int index = entry.ArgumentIndex(0);
+		if (index < 0)
+			return .Err(MakeError(entry, -1, default, "expected a value (`key value`)", .MissingValue));
+		if (entry.Entries[index].Value case .Null)
+			return false;
+		value = Ref(entry, index, entry.Name);
+		return true;
+	}
+
+	/// @brief Remove the entry nodes of a dictionary's node whose keys the dictionary no longer has, and
+	/// all but the last of duplicate keys (the one reading used).
+	/// @param node The dictionary's node.
+	/// @param dictionary The dictionary being written.
+	public static void RemoveMissingKeys<TValue>(KdlNode node, Dictionary<String, TValue> dictionary)
+	{
+		let seen = scope HashSet<StringView>();
+		var child = node.LastChild;
+		while (child.IsValid)
+		{
+			let previous = child.PreviousSibling;
+			if (!dictionary.ContainsKeyAlt(child.Name) || !seen.Add(child.Name))
+				child.Remove();
+			child = previous;
+		}
+	}
+
 	/// @brief The number of child nodes named `name`.
 	/// @param node The node.
 	/// @param name The name.
