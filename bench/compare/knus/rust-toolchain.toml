@@ -1,0 +1,4 @@
+# The comparison is built with a pinned Rust (kdl-rs needs 1.95+); the rest of the repo is unaffected.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

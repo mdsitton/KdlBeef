@@ -60,7 +60,9 @@ parsed document back to text. Each harness warms up for 1 s, then samples until 
 samples are within ±10% of their median; each value is the median of 3 separate processes. Every
 harness must report the same node count as ckdl, or its cell is FAIL. Event parsers (ckdl's C core,
 zig-kdl) build no document, so they are compared with KdlBeef's `KdlReader` pass rather than its
-document. Library versions are pinned. To reproduce, from `bench/compare/`:
+document. knus reads only KDL v1, so it parses v1 translations of the same inputs. dasel is timed
+on its own KDL parser and writer, not on the conversion into its generic data model. Library
+versions are pinned. To reproduce, from `bench/compare/`:
 
 ```bash
 ./fetch.sh && ./build.sh && ./gen-inputs.py   # and beefbuild -config=Release at the repository root

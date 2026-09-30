@@ -12,6 +12,7 @@ GitHub in either theme. No dependencies. Adapted from TomlBeef's bench/compare/p
 import math
 import os
 import re
+import textwrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results.md")
@@ -27,6 +28,7 @@ LANGUAGE = {
     "KdlBeef": "Beef", "KdlBeef events": "Beef", "ckdl": "C", "kdlpp": "C++", "kdl-rs": "Rust",
     "gokdl2": "Go", "kdly": "Go", "kdl4j": "Java", "@bgotink/kdl": "JS", "kdljs": "JS",
     "KdlSharp": "C#", "ckdl (Python)": "Python", "kdl-py": "Python", "zig-kdl": "Zig",
+    "dasel": "Go", "knus": "Rust",
 }
 DISPLAY = {"KdlBeef events": "KdlBeef (events)"}
 REPO = {
@@ -34,12 +36,21 @@ REPO = {
     "kdlpp": "tjol/ckdl", "kdl-rs": "kdl-org/kdl-rs", "gokdl2": "njreid/gokdl2", "kdly": "shimeoki/kdly",
     "kdl4j": "kdl-org/kdl4j", "@bgotink/kdl": "bgotink/kdl", "kdljs": "kdl-org/kdljs",
     "KdlSharp": "AndreyAkinshin/KdlSharp", "ckdl (Python)": "tjol/ckdl", "kdl-py": "tabatkins/kdlpy",
-    "zig-kdl": "desttinghim/zig-kdl",
+    "zig-kdl": "desttinghim/zig-kdl", "dasel": "TomWright/dasel", "knus": "TheLostLambda/knus",
 }
 # Why a library fails some of the (valid) inputs, for its footnote
 FAIL_REASON = {
     "gokdl2": "its forced-KDL-2 streaming parse hits a buffer-refill bug",
     "zig-kdl": "parse errors or a wrong node count",
+    "dasel": "rejects the identifier -->",
+}
+# Why a library times out, for its footnote
+SLOW_REASON = {
+    "dasel": "quadratic in #true/#false",
+}
+# Anything else a reader must know about a library's numbers
+NOTE = {
+    "knus": "reads only KDL v1, so it parses v1 translations of the inputs (ckdl-cat -1)",
 }
 # The per-cell time limit run.sh used (DNF cells count at input size / LIMIT)
 LIMIT = float(os.environ.get("LIMIT", "60"))
@@ -129,8 +140,10 @@ def caveat(p, table, timeouts, section=""):
         what = "all but " + listing(passed) if len(failed) > len(passed) else listing(failed)
         parts.append(f"failed {what} ({reason}; left out of its average)")
     if slow:
-        parts.append(f"did not finish {listing(slow)} within {LIMIT:.0f} s (counted at that bound, "
-                     "which flatters it)")
+        why = f"{SLOW_REASON[p]}; " if p in SLOW_REASON else ""
+        parts.append(f"did not finish {listing(slow)} within {LIMIT:.0f} s ({why}counted at that bound)")
+    if p in NOTE:
+        parts.append(NOTE[p])
     return f"{DISPLAY.get(p, p)}{section} " + "; ".join(parts) + "." if parts else None
 
 
@@ -452,8 +465,9 @@ def main():
     panel3, y = head_to_head_panel(parse, write, y + 56)
     body = panel1 + panel2 + panel3
     for note in footnotes.values():
-        y += 20
-        body.append(text(40, y, note, "footnote"))
+        for i, line in enumerate(textwrap.wrap(note, 135)):
+            y += 20 if i == 0 else 16
+            body.append(text(40 if i == 0 else 50, y, line, "footnote"))
     height = y + 44
     body.append(text(40, height - 16, FOOTER, "footer"))
     write_svg(OUT, W, height, body, "KdlBeef parsing and writing throughput compared with other KDL libraries")

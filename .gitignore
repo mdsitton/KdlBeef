@@ -23,6 +23,7 @@ bench/compare/deps/
 bench/compare/bin/
 bench/compare/inputs/
 bench/compare/rust/target/
+bench/compare/knus/target/
 bench/compare/cs/bin/
 bench/compare/cs/obj/
 bench/compare/java/build/

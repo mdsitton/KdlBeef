@@ -3,11 +3,13 @@
 
 Real-world inputs come from the official KDL repository's benchmark documents (the HTML standard as
 KDL, tests/kdl-spec/tests/benchmarks, fetched by ../../tests/fetch-spec.sh). Generated inputs cover
-the shapes a UI framework and configuration files produce. Everything is KDL 2.0.
+the shapes a UI framework and configuration files produce. Everything is KDL 2.0, plus KDL v1
+translations in inputs/v1/ for the v1-only knus (see write_v1).
 """
 import os
 import random
 import shutil
+import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "inputs")
@@ -124,6 +126,26 @@ def main():
     write("config", config(rng))
     write("strings", strings(rng))
     write("numbers", numbers(rng))
+    write_v1()
+
+
+def write_v1():
+    """KDL v1 translations into inputs/v1/ for knus, which reads only KDL v1: ckdl-cat -1 (built by
+    build.sh ckdl) writes each document as v1, and knusbench checkv1 (build.sh knus) checks it with
+    kdl-rs's v1 parser and the node count. ckdl's float formatting shortens a few floats (2.009 becomes
+    2.0), which does not matter for a parse benchmark."""
+    cat = os.path.join(HERE, "c", "build", "src", "utils", "ckdl-cat")
+    check = os.path.join(HERE, "bin", "knusbench")
+    if not (os.path.exists(cat) and os.path.exists(check)):
+        print("inputs/v1 skipped: run build.sh ckdl knus first")
+        return
+    os.makedirs(os.path.join(OUT, "v1"), exist_ok=True)
+    for name in ("html-standard", "html-standard-compact", "ui", "config", "strings", "numbers"):
+        source, target = os.path.join(OUT, name + ".kdl"), os.path.join(OUT, "v1", name + ".kdl")
+        with open(target, "wb") as f:
+            subprocess.run([cat, "-1", source], stdout=f, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run([check, "checkv1", source, target], check=True)
+        print(f"v1/{name:19} {os.path.getsize(target):>10} bytes (ckdl-cat -1)")
 
 
 if __name__ == "__main__":

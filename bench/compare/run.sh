@@ -40,6 +40,8 @@ LIBS=(
 	"kdl-rs|$B/rust-kdlbench"
 	"gokdl2|$B/go-kdlbench gokdl2"
 	"kdly|$B/go-kdlbench kdly"
+	"dasel|$B/go-kdlbench dasel"
+	"knus|$B/knusbench"
 	"kdl4j|$B/java/bin/kdlbench"
 	"@bgotink/kdl|node $C/js/bench.mjs bgotink"
 	"kdljs|node $C/js/bench.mjs kdljs"

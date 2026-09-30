@@ -1,0 +1,15 @@
+[package]
+name = "knusbench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# The pinned clone fetched by ../fetch.sh (knus 3.4.0, a knuffel fork: KDL v1 only)
+knus = { path = "../deps/knus" }
+# kdl-rs with its v1 support, only to translate the inputs to KDL v1 (tov1 mode, run by gen-inputs.py)
+kdl = { path = "../deps/kdl-rs", features = ["v1"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

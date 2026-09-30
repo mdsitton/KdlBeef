@@ -1,0 +1,39 @@
+// Package kdlbenchhook exposes dasel's KDL parser and generator (parsing/kdl/internal) to the benchmark.
+// Go only lets code under parsing/kdl import that package, and deps/ is not edited, so build.sh adds
+// this file to the dasel clone virtually, with go build -overlay, as
+// deps/dasel/parsing/kdl/kdlbenchhook/hook.go. (The .in suffix keeps it out of the harness's own build.)
+package kdlbenchhook
+
+import (
+	"strings"
+
+	"github.com/tomwright/dasel/v3/parsing/kdl/internal"
+)
+
+// Document is dasel's KDL syntax tree
+type Document = internal.Document
+
+// Parse is internal.Parse: the text into dasel's KDL document
+func Parse(input string) (*Document, error) {
+	return internal.Parse(input)
+}
+
+// Write is internal.Generate with its default options (KDL v2, four-space indent)
+func Write(doc *Document) (string, error) {
+	var sb strings.Builder
+	err := internal.Generate(&sb, doc, internal.DefaultGenerateOptions())
+	return sb.String(), err
+}
+
+// Count is every node, children included
+func Count(doc *Document) int {
+	return count(doc.Nodes)
+}
+
+func count(nodes []*internal.Node) int {
+	n := 0
+	for _, node := range nodes {
+		n += 1 + count(node.Children)
+	}
+	return n
+}

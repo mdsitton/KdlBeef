@@ -30,6 +30,9 @@ fetch kdljs       https://github.com/kdl-org/kdljs.git           d7d95b92ee01528
 fetch KdlSharp    https://github.com/AndreyAkinshin/KdlSharp.git 7d2e972e4001e1d4f8df98268cb2859c169a29b3
 fetch kdlpy       https://github.com/tabatkins/kdlpy.git         d9a220762fb9f55e4f59296256221084c26f54da  # kdl-py 1.2.0
 fetch zig-kdl     https://codeberg.org/desttinghim/zig-kdl.git   22fa7655d70de1f447c864921ab847effec355f3
+# Added 2026-09-30 (newest commits then)
+fetch dasel       https://github.com/TomWright/dasel.git         c5cf675972e68f17d0072c0e29801d09ca5c3951  # v3, its own KDL parser
+fetch knus        https://github.com/TheLostLambda/knus.git      20eb6f76530b73ff2f1b68e4cca415683f38a053  # 3.4.0, KDL v1 only
 # The spec repository as well, for reading alongside the implementations (the suite itself comes
 # from tests/fetch-spec.sh at the same commit)
 fetch kdl         https://github.com/kdl-org/kdl.git             89c1087d5e7f530de328f18b6a0fad54ca8ea227

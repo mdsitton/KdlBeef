@@ -1,4 +1,4 @@
-// Go KDL benchmark: kdlbench <gokdl2|kdly> <parse|write> <file> <min-samples>
+// Go KDL benchmark: kdlbench <gokdl2|kdly|dasel> <parse|write> <file> <min-samples>
 //
 //	kdlbench typed gokdl2 <read|write> <file> <min-samples> - typed mapping, see typed.go
 //
@@ -6,6 +6,10 @@
 //	         write is GenerateWithOptions with Version 2 (its default output is KDL v1)
 //	kdly   - codeberg.org/shimeoki/kdly: Parser.Parse into its lossless syntax tree;
 //	         write is Formatter.Format
+//	dasel  - github.com/tomwright/dasel/v3: its KDL parser (parsing/kdl/internal.Parse) into its
+//	         KDL document, write is internal.Generate; reached through daselhook/hook.go.in (see
+//	         there). dasel's public reader goes on to convert that document into its generic
+//	         map model, which merges children into properties and is not timed here.
 //
 // Prints the node count as a check line. Timings follow the shared rule (see measure and ../run.sh).
 package main
@@ -21,6 +25,7 @@ import (
 	"codeberg.org/shimeoki/kdly"
 	kdl "github.com/njreid/gokdl2"
 	"github.com/njreid/gokdl2/document"
+	daselkdl "github.com/tomwright/dasel/v3/parsing/kdl/kdlbenchhook"
 )
 
 // measure warms up for at least 1 s (at least one run), then times single runs until at least
@@ -133,6 +138,26 @@ func main() {
 				fail(err)
 			}
 			return buf.Len()
+		}
+	case "dasel":
+		text := string(data)
+		doc, err := daselkdl.Parse(text)
+		if err != nil {
+			fail(err)
+		}
+		parse = func() int {
+			d, err := daselkdl.Parse(text)
+			if err != nil {
+				fail(err)
+			}
+			return daselkdl.Count(d)
+		}
+		write = func() int {
+			out, err := daselkdl.Write(doc)
+			if err != nil {
+				fail(err)
+			}
+			return len(out)
 		}
 	case "kdly":
 		doc, err := kdly.NewParser(bytes.NewReader(data)).Parse()

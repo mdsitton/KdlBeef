@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds every comparison harness into bin/ (git-ignored). Run fetch.sh first. C and C++ use -O3
 # without -march=native (generic x86-64, like Beef's Release builds). Pass harness names to build only
-# those: ckdl rust go java js cs python zig (kdlbeef joins once the library parses).
+# those: ckdl rust knus go java js cs python zig (KdlBeef is built at the repository root).
 set -euo pipefail
 C="$(cd "$(dirname "$0")" && pwd)"
 D="$C/deps"
@@ -27,9 +27,18 @@ if want rust; then
 	(cd "$C/rust" && cargo build -q --release --target-dir "$C/rust/target")
 	cp "$C/rust/target/release/kdlbench" "$B/rust-kdlbench"
 fi
+if want knus; then
+	step "rust (knus)"
+	(cd "$C/knus" && cargo build -q --release --target-dir "$C/knus/target")
+	cp "$C/knus/target/release/knusbench" "$B/knusbench"
+fi
 if want go; then
-	step "go (gokdl2, kdly)"
-	(cd "$C/go" && go build -o "$B/go-kdlbench" .)
+	step "go (gokdl2, kdly, dasel)"
+	# dasel's KDL parser is in an internal package: go/daselhook/hook.go.in joins the dasel clone
+	# virtually, through an overlay, as a package that may import it (deps/ stays untouched)
+	printf '{"Replace":{"%s":"%s"}}\n' "$D/dasel/parsing/kdl/kdlbenchhook/hook.go" "$C/go/daselhook/hook.go.in" \
+		> "$B/dasel-overlay.json"
+	(cd "$C/go" && go build -overlay "$B/dasel-overlay.json" -o "$B/go-kdlbench" .)
 fi
 if want java; then
 	step "java (kdl4j)"
