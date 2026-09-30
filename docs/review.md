@@ -442,5 +442,9 @@ Follow-ups done after that:
 Throughput after all of these: document read 254 MB/s on `ui` and 230 on `html-standard`, event pass
 313-319 and 307, typed read 38.9 ms and write 23.2 ms, the same as before within noise.
 
-Not done, recorded in `status.md`: splitting `ReadNext` along its responsibilities (its invariants
-are stated, the code is not restructured); the API additions.
+- **Reader split.** `ReadNext` is now only the loop over two steps, with a helper per construct and
+  suppression plus source capture in one `Report` helper (`architecture.md` §3); measured against
+  the previous build in alternating runs: ±1% on `ui` and `config`, +5% on `numbers`, −3% on
+  `html-standard`.
+
+Not done, recorded in `status.md`: the API additions.

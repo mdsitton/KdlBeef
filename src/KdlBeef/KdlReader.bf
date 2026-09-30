@@ -555,221 +555,286 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		}
 	}
 
+	/// A step's result when it read something that reports no event (never returned by Next).
+	const KdlEvent cNoEvent = (KdlEvent)0xFF;
+
+	/// The next event. Each step reads one construct and returns its event, or cNoEvent when there is
+	/// none to report (the construct was slashdashed, or a `}`, a slashdash or a `{`), and the loop takes
+	/// the next step.
 	Result<KdlEvent, KdlFailure> ReadNext()
 	{
 		if (mState == .Start)
-		{
-			switch (mCursor.Begin(ref mData, ref mBase, ref mEnd))
-			{
-			case .Ok(let start):
-				mPos = start;
-				mContentStart = start;
-				mSliceStart = start;
-			case .Err(let error):
-				mError = error;
-				if (!mConfig.SourceName.IsEmpty)
-					mError.SetSource(mConfig.SourceName);
-				return .Err(.());
-			}
-			mState = .Nodes;
-		}
+			Try!(BeginInput());
 		while (true)
 		{
+			KdlEvent event;
 			switch (mState)
 			{
 			case .Nodes:
-				mRetain = RetainIdle;
-				Try!(SkipLineSpace());
-				if (!Avail(mPos))
-				{
-					if (mInputFailed)
-						return .Err(Fail(.IoError, "", mPos));
-					if (mFrames.Count > 0)
-					{
-						if (mClosingAtEnd)
-						{
-							// CollectErrors, after reporting an unclosed block: close what is open
-							if (EndNode())
-								return .Ok(.EndNode);
-							continue;
-						}
-						ref Frame open = ref mFrames.Back;
-						return .Err(FailAt(.UnbalancedBraces, "Expected `}` to close this children block", open.mBraceOffset, open.mBraceLine, open.mBraceColumn));
-					}
-					mState = .End;
-					mDepth = 0;
-					mEventOffset = mPos;
-					mEventEnd = mPos;
-					ReportSlice(mPos);
-					return .Ok(.EndOfDocument);
-				}
-				char8 b = mData[mPos];
-				if (b == '}')
-				{
-					if (mFrames.Count == 0)
-						return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
-					mPos++;
-					mLastTokenEnd = mPos;
-					ref Frame frame = ref mFrames.Back;
-					if (frame.mChildrenSlashdashed)
-					{
-						frame.mChildrenSlashdashed = false;
-						mSuppressed--;
-						if (frame.mPhase == .Entries)
-							frame.mPhase = .AfterSlashdashedBlock;
-					}
-					else
-					{
-						frame.mPhase = .AfterBlock;
-						frame.mBlockCloseEnd = (int32)mPos;
-					}
-					mState = .Entries;
-					mPendingSpace = false;
-					continue;
-				}
-				int nodeStart = mPos;
-				mRetain = Math.Min(nodeStart, RetainIdle);
-				bool slashdash = false;
-				if (b == '/' && PeekAt(1) == '-')
-				{
-					Try!(ReadSlashdash());
-					slashdash = true;
-				}
-				Try!(ReadNodeHead());
-				if (mConfig.MaxDepth > 0 && mFrames.Count >= mConfig.MaxDepth)
-					return .Err(Fail(.ResourceLimitExceeded, scope $"Nodes are nested deeper than MaxDepth ({mConfig.MaxDepth})", nodeStart));
-				if (mConfig.MaxNodes > 0 && ++mNodeCount > mConfig.MaxNodes)
-					return .Err(Fail(.ResourceLimitExceeded, scope $"The document has more nodes than MaxNodes ({mConfig.MaxNodes})", nodeStart));
-				Frame opened = default;
-				opened.mSlashdashed = slashdash;
-				opened.mStart = (int32)nodeStart;
-				mFrames.Add(opened);
-				if (slashdash)
-					mSuppressed++;
-				mState = .Entries;
-				mPendingSpace = false;
-				if (mSuppressed == 0)
-				{
-					mDepth = mFrames.Count - 1;
-					mEventOffset = nodeStart;
-					mEventEnd = mLastTokenEnd;
-					ReportSlice(mLastTokenEnd);
-					return .Ok(.StartNode);
-				}
-
+				event = Try!(StepNodes());
 			case .Entries:
-				if (mEndAfterRecovery)
-				{
-					// CollectErrors: the rest of this node was skipped
-					mEndAfterRecovery = false;
-					if (EndNode())
-						return .Ok(.EndNode);
-					continue;
-				}
-				mRetain = RetainIdle;
-				bool space = mPendingSpace;
-				mPendingSpace = false;
-				if (Try!(SkipNodeSpace()))
-					space = true;
-				if (!Avail(mPos))
-				{
-					if (EndNode())
-						return .Ok(.EndNode);
-					continue;
-				}
-				char8 c = mData[mPos];
-				int newline = NewlineAt(mPos);
-				bool terminated = true;
-				if (newline > 0)
-					mPos += newline;
-				else if (c == ';')
-					mPos++;
-				else if (c == '/' && PeekAt(1) == '/')
-					SkipSingleLineComment();
-				else if (c == '}')
-				{
-					// The parent's `}` ends the node; the Nodes state consumes it
-					if (mFrames.Count < 2)
-						return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
-				}
-				else
-					terminated = false;
-				if (terminated)
-				{
-					if (EndNode())
-						return .Ok(.EndNode);
-					continue;
-				}
-
-				ref Frame current = ref mFrames.Back;
-				if (c == '/' && PeekAt(1) == '-')
-				{
-					Try!(ReadSlashdash());
-					if (mData[mPos] == '{')
-					{
-						current.mChildrenSlashdashed = true;
-						NoteBrace(ref current);
-						mSuppressed++;
-						mPos++;
-						mState = .Nodes;
-						continue;
-					}
-					if (current.mPhase != .Entries)
-						return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
-					if (mData[mPos] == '=')
-						return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come between a property's key and `=`; put it before the key", mPos));
-					if (!CanStartValue(mPos) && mData[mPos] != '(')
-						return .Err(Unexpected("an argument, property or children block after `/-`"));
-					Try!(CountEntry(ref current));
-					mRetain = Math.Min(mPos, RetainIdle);
-					mSuppressed++;
-					Try!(ReadEntry());
-					mSuppressed--;
-					continue;
-				}
-				if (c == '{')
-				{
-					if (current.mPhase == .AfterBlock)
-						return .Err(Fail(.InvalidChildren, "A node can have only one children block; slashdash (`/-`) the others", mPos));
-					NoteBrace(ref current);
-					mPos++;
-					if (mSuppressed == 0)
-						mPendingBlockOpen = mPos;
-					mState = .Nodes;
-					continue;
-				}
-				if (!CanStartValue(mPos) && c != '(')
-				{
-					if (IsIdentifierByte(Before(mPos)) && (c == '/' || c == '[' || c == ']' || c == ')'))
-						return .Err(Fail(.UnexpectedChar, scope $"`{c}` cannot appear in an identifier string: quote the string", mPos));
-					return .Err(Unexpected("an argument, property, children block or the end of the node"));
-				}
-				if (current.mPhase == .AfterBlock)
-					return .Err(Fail(.InvalidChildren, "Expected the end of the node (a newline or `;`) after its children block", mPos));
-				if (current.mPhase != .Entries)
-					return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
-				if (!space)
-					return .Err(MissingSpace());
-				Try!(CountEntry(ref current));
-				int entryStart = mPos;
-				mRetain = Math.Min(entryStart, RetainIdle);
-				let event = Try!(ReadEntry());
-				if (mSuppressed == 0)
-				{
-					mDepth = mFrames.Count - 1;
-					mEventOffset = entryStart;
-					mEventEnd = mLastTokenEnd;
-					ReportSlice(mLastTokenEnd);
-					return .Ok(event);
-				}
-
+				event = Try!(StepEntries());
 			case .End:
 				return .Ok(.EndOfDocument);
-
 			case .Start, .Failed:
 				Runtime.FatalError("KdlReader: unreachable state");
 			}
+			if (event != cNoEvent)
+				return .Ok(event);
 		}
+	}
+
+	/// Validates the start of the input (a stream's first buffer) and sets up the window.
+	Result<void, KdlFailure> BeginInput()
+	{
+		switch (mCursor.Begin(ref mData, ref mBase, ref mEnd))
+		{
+		case .Ok(let start):
+			mPos = start;
+			mContentStart = start;
+			mSliceStart = start;
+		case .Err(let error):
+			mError = error;
+			if (!mConfig.SourceName.IsEmpty)
+				mError.SetSource(mConfig.SourceName);
+			return .Err(.());
+		}
+		mState = .Nodes;
+		return .Ok;
+	}
+
+	/// Suppression and source capture for an event read from `start` to `end`: whether it is reported
+	/// (nothing slashdashed encloses it), and if so its depth, range and PreserveStyle slice.
+	[Inline]
+	bool Report(int start, int end)
+	{
+		if (mSuppressed != 0)
+			return false;
+		mDepth = mFrames.Count - 1;
+		mEventOffset = start;
+		mEventEnd = end;
+		ReportSlice(end);
+		return true;
+	}
+
+	// Between nodes: before a node, a `}` or the end
+
+	[Inline]
+	Result<KdlEvent, KdlFailure> StepNodes()
+	{
+		mRetain = RetainIdle;
+		Try!(SkipLineSpace());
+		if (!Avail(mPos))
+			return AtInputEnd();
+		char8 b = mData[mPos];
+		if (b == '}')
+		{
+			Try!(CloseBlock());
+			return cNoEvent;
+		}
+		return OpenNode(b);
+	}
+
+	/// The end of the input between nodes: the end of the document, the input's own failure, an unclosed
+	/// block, or (recovering from that) the EndNodes that close what is still open, one per call.
+	Result<KdlEvent, KdlFailure> AtInputEnd()
+	{
+		if (mInputFailed)
+			return .Err(Fail(.IoError, "", mPos));
+		if (mFrames.Count > 0)
+		{
+			if (mClosingAtEnd)
+			{
+				// CollectErrors, after reporting an unclosed block: close what is open
+				return EndNode() ? KdlEvent.EndNode : cNoEvent;
+			}
+			ref Frame open = ref mFrames.Back;
+			return .Err(FailAt(.UnbalancedBraces, "Expected `}` to close this children block", open.mBraceOffset, open.mBraceLine, open.mBraceColumn));
+		}
+		mState = .End;
+		mDepth = 0;
+		mEventOffset = mPos;
+		mEventEnd = mPos;
+		ReportSlice(mPos);
+		return KdlEvent.EndOfDocument;
+	}
+
+	/// A `}`: ends the current node's children block (a slashdashed one lifts its suppression); the node
+	/// goes on with what may follow its block.
+	[Inline]
+	Result<void, KdlFailure> CloseBlock()
+	{
+		if (mFrames.Count == 0)
+			return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
+		mPos++;
+		mLastTokenEnd = mPos;
+		ref Frame frame = ref mFrames.Back;
+		if (frame.mChildrenSlashdashed)
+		{
+			frame.mChildrenSlashdashed = false;
+			mSuppressed--;
+			if (frame.mPhase == .Entries)
+				frame.mPhase = .AfterSlashdashedBlock;
+		}
+		else
+		{
+			frame.mPhase = .AfterBlock;
+			frame.mBlockCloseEnd = (int32)mPos;
+		}
+		mState = .Entries;
+		mPendingSpace = false;
+		return .Ok;
+	}
+
+	/// A node's head (after an optional `/-`): opens its frame, checking the depth and node limits.
+	[Inline]
+	Result<KdlEvent, KdlFailure> OpenNode(char8 first)
+	{
+		int nodeStart = mPos;
+		mRetain = Math.Min(nodeStart, RetainIdle);
+		bool slashdash = false;
+		if (first == '/' && PeekAt(1) == '-')
+		{
+			Try!(ReadSlashdash());
+			slashdash = true;
+		}
+		Try!(ReadNodeHead());
+		if (mConfig.MaxDepth > 0 && mFrames.Count >= mConfig.MaxDepth)
+			return .Err(Fail(.ResourceLimitExceeded, scope $"Nodes are nested deeper than MaxDepth ({mConfig.MaxDepth})", nodeStart));
+		if (mConfig.MaxNodes > 0 && ++mNodeCount > mConfig.MaxNodes)
+			return .Err(Fail(.ResourceLimitExceeded, scope $"The document has more nodes than MaxNodes ({mConfig.MaxNodes})", nodeStart));
+		Frame opened = default;
+		opened.mSlashdashed = slashdash;
+		opened.mStart = (int32)nodeStart;
+		mFrames.Add(opened);
+		if (slashdash)
+			mSuppressed++;
+		mState = .Entries;
+		mPendingSpace = false;
+		return Report(nodeStart, mLastTokenEnd) ? KdlEvent.StartNode : cNoEvent;
+	}
+
+	// Inside a node: before an entry, a children block or its terminator
+
+	[Inline]
+	Result<KdlEvent, KdlFailure> StepEntries()
+	{
+		if (mEndAfterRecovery)
+		{
+			// CollectErrors: the rest of this node was skipped
+			mEndAfterRecovery = false;
+			return EndNode() ? KdlEvent.EndNode : cNoEvent;
+		}
+		mRetain = RetainIdle;
+		bool space = mPendingSpace;
+		mPendingSpace = false;
+		if (Try!(SkipNodeSpace()))
+			space = true;
+		if (!Avail(mPos))
+			return EndNode() ? KdlEvent.EndNode : cNoEvent;
+		char8 c = mData[mPos];
+		if (Try!(AtTerminator(c)))
+			return EndNode() ? KdlEvent.EndNode : cNoEvent;
+
+		ref Frame current = ref mFrames.Back;
+		if (c == '/' && PeekAt(1) == '-')
+		{
+			Try!(SlashdashedInNode(ref current));
+			return cNoEvent;
+		}
+		if (c == '{')
+		{
+			Try!(OpenBlock(ref current));
+			return cNoEvent;
+		}
+		return NextEntry(ref current, c, space);
+	}
+
+	/// Consumes the node's terminator if one is at mPos: a newline, `;` or `//` comment, or (not
+	/// consumed: the Nodes state takes it) the parent's `}`. @return Whether the node ends here.
+	[Inline]
+	Result<bool, KdlFailure> AtTerminator(char8 c)
+	{
+		int newline = NewlineAt(mPos);
+		if (newline > 0)
+			mPos += newline;
+		else if (c == ';')
+			mPos++;
+		else if (c == '/' && PeekAt(1) == '/')
+			SkipSingleLineComment();
+		else if (c == '}')
+		{
+			if (mFrames.Count < 2)
+				return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
+		}
+		else
+			return false;
+		return true;
+	}
+
+	/// A `/-` inside a node: a slashdashed children block (its content is read, not reported) or a
+	/// slashdashed argument or property (read and dropped).
+	Result<void, KdlFailure> SlashdashedInNode(ref Frame current)
+	{
+		Try!(ReadSlashdash());
+		if (mData[mPos] == '{')
+		{
+			current.mChildrenSlashdashed = true;
+			NoteBrace(ref current);
+			mSuppressed++;
+			mPos++;
+			mState = .Nodes;
+			return .Ok;
+		}
+		if (current.mPhase != .Entries)
+			return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
+		if (mData[mPos] == '=')
+			return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come between a property's key and `=`; put it before the key", mPos));
+		if (!CanStartValue(mPos) && mData[mPos] != '(')
+			return .Err(Unexpected("an argument, property or children block after `/-`"));
+		Try!(CountEntry(ref current));
+		mRetain = Math.Min(mPos, RetainIdle);
+		mSuppressed++;
+		Try!(ReadEntry());
+		mSuppressed--;
+		return .Ok;
+	}
+
+	/// A children block's `{`: the Nodes state reads its children.
+	[Inline]
+	Result<void, KdlFailure> OpenBlock(ref Frame current)
+	{
+		if (current.mPhase == .AfterBlock)
+			return .Err(Fail(.InvalidChildren, "A node can have only one children block; slashdash (`/-`) the others", mPos));
+		NoteBrace(ref current);
+		mPos++;
+		if (mSuppressed == 0)
+			mPendingBlockOpen = mPos;
+		mState = .Nodes;
+		return .Ok;
+	}
+
+	/// An argument or property, after the checks that one may come here.
+	[Inline]
+	Result<KdlEvent, KdlFailure> NextEntry(ref Frame current, char8 c, bool space)
+	{
+		if (!CanStartValue(mPos) && c != '(')
+		{
+			if (IsIdentifierByte(Before(mPos)) && (c == '/' || c == '[' || c == ']' || c == ')'))
+				return .Err(Fail(.UnexpectedChar, scope $"`{c}` cannot appear in an identifier string: quote the string", mPos));
+			return .Err(Unexpected("an argument, property, children block or the end of the node"));
+		}
+		if (current.mPhase == .AfterBlock)
+			return .Err(Fail(.InvalidChildren, "Expected the end of the node (a newline or `;`) after its children block", mPos));
+		if (current.mPhase != .Entries)
+			return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
+		if (!space)
+			return .Err(MissingSpace());
+		Try!(CountEntry(ref current));
+		int entryStart = mPos;
+		mRetain = Math.Min(entryStart, RetainIdle);
+		let event = Try!(ReadEntry());
+		return Report(entryStart, mLastTokenEnd) ? event : cNoEvent;
 	}
 
 	/// Pops the current node. @return Whether an EndNode event is due.

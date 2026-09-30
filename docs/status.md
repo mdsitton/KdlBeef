@@ -74,7 +74,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 | ID | Item | Size |
 |----|------|------|
-| R | [Deep review](review.md) follow-ups (R1-R9, the quadratic typed lists, decimal big integers and idle-whitespace retention are fixed, see its *Resolution*): splitting `ReadNext` along its responsibilities (normal parsing, slashdash suppression, recovery, source capture; its invariants are now stated on `KdlReaderCore`), measured against the hot paths; the review's API additions | M |
+| R | [Deep review](review.md) follow-ups (R1-R9, the quadratic typed lists, decimal big integers and idle-whitespace retention are fixed, see its *Resolution*): the review's API additions (entry annotation setters, strict typed binding, unsigned getters, editable slashdashed content) | M |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 

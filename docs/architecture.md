@@ -146,6 +146,16 @@ node, not stack):
   or a children block; `{` opens the children block (state Nodes); anything else is an entry, which
   must follow whitespace.
 
+In the code, `ReadNext` is only the loop: each state is a step (`StepNodes`, `StepEntries`) that reads
+one construct through a helper per construct (`AtInputEnd`, `CloseBlock`, `OpenNode`, `AtTerminator`,
+`SlashdashedInNode`, `OpenBlock`, `NextEntry`) and returns its event, or `cNoEvent` when it has none
+to report. Suppression and source capture meet in one place, `Report` (reported only outside
+slashdashed content; depth, range and PreserveStyle slice set there); recovery's leftovers are the
+first thing each step checks (`mClosingAtEnd`, `mEndAfterRecovery`). The helpers on the hot path are
+`[Inline]`, so the compiled loop is the same shape as before the split: measured against it
+(alternating runs), document reads are within ±1% on `ui` and `config`, +5% on `numbers` and −3% on
+`html-standard` (same instruction count and fewer branch misses there: code layout).
+
 `Frame.mPhase` enforces the order of `base-node`: entries, then slashdashed children blocks, then at
 most one real block, then slashdashed blocks only.
 
