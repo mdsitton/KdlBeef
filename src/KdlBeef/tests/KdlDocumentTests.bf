@@ -106,16 +106,34 @@ static class KdlDocumentTests
 	[Test]
 	public static void Handles_InvalidAfterReadOrClear()
 	{
-		let doc = ReadOrFail(scope KdlDocument(), "a { b }");
+		let doc = ReadOrFail(scope KdlDocument(), "a 1 { b }");
 		let a = doc.Nodes.First;
 		let b = a.FirstChild;
-		Test.Assert(a.IsValid && b.IsValid);
+		// Saved views: they follow changes to their node, and know when it goes
+		let nodes = doc.Nodes;
+		let children = a.Children;
+		let entries = a.Entries;
+		Test.Assert(a.IsValid && b.IsValid && nodes.IsValid && children.IsValid && entries.IsValid);
+		a.AddChild("added");
+		a.AddArgument(.Integer(2, default));
+		Test.Assert(children.Count == 2 && entries.Count == 2 && children.IsValid);
 
 		ReadOrFail(doc, "c { d }");
-		// Same IDs, new document content: the old handles know
+		// Same IDs, new document content: the old handles and views know (using a stale view is a
+		// fatal error, like using a stale handle)
 		Test.Assert(!a.IsValid && !b.IsValid);
+		Test.Assert(!nodes.IsValid && !children.IsValid && !entries.IsValid);
 		Test.Assert(doc.Nodes.First.Name == "c");
 		Test.Assert(doc.GetNode(a.Id).Name == "c");
+
+		// A removed node's views are stale too; its removed child's parent list is not
+		let c = doc.Nodes.First;
+		let cChildren = c.Children;
+		let cEntries = c.Entries;
+		c.FirstChild.Remove();
+		Test.Assert(cChildren.IsValid && cChildren.IsEmpty);
+		c.Remove();
+		Test.Assert(!cChildren.IsValid && !cEntries.IsValid && doc.Nodes.IsValid);
 
 		doc.Clear();
 		Test.Assert(doc.Nodes.IsEmpty && doc.Nodes.Count == 0 && !doc.Nodes.First.IsValid);

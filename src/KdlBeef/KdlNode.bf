@@ -261,33 +261,51 @@ public struct KdlNode : IEquatable<KdlNode>
 	public static bool operator !=(KdlNode lhs, KdlNode rhs) => !lhs.Equals(rhs);
 }
 
-/// The children of a node (or the document's top-level nodes), in order.
+/// The children of a node (or the document's top-level nodes), in order: a live view of them, valid
+/// while the node is in the document (like a KdlNode handle: using it after the document is read again
+/// or cleared, or the node removed, is a fatal error).
 public struct KdlNodeList : IEnumerable<KdlNode>
 {
 	KdlDocument mDocument;
 	uint32 mParent;
+	uint32 mGeneration;
 
 	internal this(KdlDocument document, uint32 parent)
 	{
 		mDocument = document;
 		mParent = parent;
+		mGeneration = document.mGeneration;
+	}
+
+	/// @brief Whether the view can still be used: its document was not read again or cleared, and its
+	/// node was not removed.
+	public bool IsValid => mDocument != null && mGeneration == mDocument.mGeneration && (mParent == 0 || mDocument.IsLive(mParent));
+
+	/// The parent's record, after checking the view is still valid
+	ref KdlNodeRecord Parent
+	{
+		get
+		{
+			mDocument.CheckView(mGeneration, mParent);
+			return ref mDocument.mNodes[mParent];
+		}
 	}
 
 	/// @brief The number of nodes.
-	public int Count => mDocument.mNodes[mParent].mChildCount;
+	public int Count => Parent.mChildCount;
 	/// @brief Whether there are none.
-	public bool IsEmpty => mDocument.mNodes[mParent].mFirstChild == 0;
+	public bool IsEmpty => Parent.mFirstChild == 0;
 	/// @brief The first node; invalid when there are none.
-	public KdlNode First => KdlNode.Of(mDocument, mDocument.mNodes[mParent].mFirstChild);
+	public KdlNode First => KdlNode.Of(mDocument, Parent.mFirstChild);
 	/// @brief The last node; invalid when there are none.
-	public KdlNode Last => KdlNode.Of(mDocument, mDocument.mNodes[mParent].mLastChild);
+	public KdlNode Last => KdlNode.Of(mDocument, Parent.mLastChild);
 
 	/// @brief The first node with the given name.
 	/// @param name The name.
 	/// @return The node, or an invalid handle.
 	public KdlNode Find(StringView name)
 	{
-		uint32 id = mDocument.mNodes[mParent].mFirstChild;
+		uint32 id = Parent.mFirstChild;
 		while (id != 0)
 		{
 			if (mDocument.mNodes[id].mName == name)
@@ -297,25 +315,28 @@ public struct KdlNodeList : IEnumerable<KdlNode>
 		return KdlNode.Of(mDocument, id);
 	}
 
-	public Enumerator GetEnumerator() => .(mDocument, mDocument.mNodes[mParent].mFirstChild);
+	public Enumerator GetEnumerator() => .(mDocument, Parent.mFirstChild);
 
 	/// Walks the sibling links. It reads the next node before returning the current one, so the
-	/// current node may be removed during the loop.
+	/// current node may be removed during the loop (not the document read again or cleared).
 	public struct Enumerator : IEnumerator<KdlNode>
 	{
 		KdlDocument mDocument;
 		uint32 mNext;
+		uint32 mGeneration;
 
 		internal this(KdlDocument document, uint32 first)
 		{
 			mDocument = document;
 			mNext = first;
+			mGeneration = document.mGeneration;
 		}
 
 		public Result<KdlNode> GetNext() mut
 		{
 			if (mNext == 0)
 				return .Err;
+			mDocument.CheckView(mGeneration, 0);
 			let node = KdlNode(mDocument, mNext);
 			mNext = mDocument.mNodes[mNext].mNextSibling;
 			return node;

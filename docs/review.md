@@ -417,8 +417,17 @@ Performance:
 
 Also fixed: `KdlReader`'s configuration comments now say what MetadataMode does.
 
+Follow-ups done after that:
+
+- **Dictionary writes** index the entry nodes by key once (`KdlKeyIndex`): 4,000 / 16,000 / 64,000
+  keys write in 0.35 / 1.82 / 7.48 ms (test `Dictionaries_LargeWritesAndNulls`).
+- **Mapping checks** at compile time: negative or repeated argument indices, a second
+  `[KdlArguments]` or `[KdlChildren]` in a chain, several role attributes on one field, and two
+  properties or two child nodes with one name all stop the build, naming both fields (each checked
+  with a throwaway type; `FineSameName` guards against a false positive).
+- **Saved views** (`Children`, `Nodes`, `Entries`, `Named`, `Descendants`, their enumerators) carry
+  the document's generation and their node: `IsValid` tells, and using a stale one is a fatal error,
+  as for a handle (test in `Handles_InvalidAfterReadOrClear`).
+
 Not done, recorded in `status.md`: strict allocation budgets for `MaxStringBytes` and non-streaming
-`ReadFile`; the reader-invariant and serializer-descriptor refactors; generation checks for saved
-`Children`/`Entries` views; compile-time rejection of duplicate or negative argument indices and
-overlapping roles; the API additions. Dictionary writes still find each key's node with a scan, which
-is quadratic for very large dictionaries.
+`ReadFile`; the reader-invariant and serializer-descriptor refactors; the API additions.

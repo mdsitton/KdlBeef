@@ -423,6 +423,16 @@ public class KdlDocument
 		return id != 0 && id < (uint32)mNodes.Count && !mNodes[id].mFlags.HasFlag(.Removed);
 	}
 
+	/// A saved view (a node's Children or Entries, Nodes, Named, Descendants) made at `generation` for
+	/// node `id` (0: the document): a fatal error if the document was read again or cleared since, or
+	/// the node removed, as for a KdlNode handle (it would show other content, or none).
+	[Inline]
+	internal void CheckView(uint32 generation, uint32 id)
+	{
+		if (generation != mGeneration || (id != 0 && !IsLive(id)))
+			Runtime.FatalError("KdlBeef: a saved node list, entry list or enumerator is stale: its document was read again or cleared, or its node removed");
+	}
+
 	/// Adds an unlinked node with its own copy of the name and annotation.
 	internal uint32 NewNode(StringView name, bool hasAnnotation, StringView annotation)
 	{

@@ -192,22 +192,25 @@ extension KdlNodeList
 	/// @brief The nodes with the given name, in order: `for (let button in panel.Children.Named("button"))`.
 	/// @param name The node name (borrowed for the loop).
 	/// @return The matching nodes.
-	public KdlNamedNodes Named(StringView name) => .(mDocument, mDocument.mNodes[mParent].mFirstChild, name);
+	public KdlNamedNodes Named(StringView name) => .(mDocument, Parent.mFirstChild, name);
 }
 
 /// Sibling nodes with one name (KdlNodeList.Named). Like the list's own enumerator, it reads the next
-/// match before returning the current one, so the current node may be removed during the loop.
+/// match before returning the current one, so the current node may be removed during the loop. Using it
+/// after the document is read again or cleared is a fatal error.
 public struct KdlNamedNodes : IEnumerable<KdlNode>
 {
 	KdlDocument mDocument;
 	uint32 mFirst;
 	StringView mName;
+	uint32 mGeneration;
 
 	internal this(KdlDocument document, uint32 first, StringView name)
 	{
 		mDocument = document;
 		mFirst = first;
 		mName = name;
+		mGeneration = document.mGeneration;
 	}
 
 	/// @brief The first match.
@@ -229,6 +232,7 @@ public struct KdlNamedNodes : IEnumerable<KdlNode>
 	/// The first node from `id` on (itself included) with the name, or 0
 	uint32 Next(uint32 id)
 	{
+		mDocument.CheckView(mGeneration, 0);
 		var id;
 		while (id != 0 && mDocument.mNodes[id].mName != mName)
 			id = mDocument.mNodes[id].mNextSibling;
@@ -252,6 +256,7 @@ public struct KdlNamedNodes : IEnumerable<KdlNode>
 		{
 			if (mNext == 0)
 				return .Err;
+			mNodes.mDocument.CheckView(mNodes.mGeneration, 0);
 			let node = KdlNode(mNodes.mDocument, mNext);
 			mNext = mNodes.Next(mNodes.mDocument.mNodes[mNext].mNextSibling);
 			return node;
@@ -260,13 +265,15 @@ public struct KdlNamedNodes : IEnumerable<KdlNode>
 }
 
 /// Every node below one node (KdlNode.Descendants), depth first in document order: a node, then its
-/// children, then its next sibling. Do not add or remove nodes while enumerating.
+/// children, then its next sibling. Do not add or remove nodes while enumerating; using it after the
+/// document is read again or cleared, or the node removed, is a fatal error.
 public struct KdlDescendants : IEnumerable<KdlNode>
 {
 	KdlDocument mDocument;
 	uint32 mRoot;
 	StringView mName;
 	bool mFiltered;
+	uint32 mGeneration;
 
 	internal this(KdlDocument document, uint32 root, StringView name = default, bool filtered = false)
 	{
@@ -274,12 +281,18 @@ public struct KdlDescendants : IEnumerable<KdlNode>
 		mRoot = root;
 		mName = name;
 		mFiltered = filtered;
+		mGeneration = document.mGeneration;
 	}
 
 	/// @brief Only the descendants with the given name: `window.Descendants.Named("button")`.
 	/// @param name The node name (borrowed for the loop).
 	/// @return The matching descendants, in the same order.
-	public KdlDescendants Named(StringView name) => .(mDocument, mRoot, name, true);
+	public KdlDescendants Named(StringView name)
+	{
+		var named = KdlDescendants(mDocument, mRoot, name, true);
+		named.mGeneration = mGeneration;
+		return named;
+	}
 
 	/// @brief The first descendant (with the name, after Named), depth first.
 	/// @return The node, or an invalid handle when there is none.
@@ -306,6 +319,7 @@ public struct KdlDescendants : IEnumerable<KdlNode>
 	/// `id`'s own children come first.
 	uint32 After(uint32 id, bool enter)
 	{
+		mDocument.CheckView(mGeneration, mRoot);
 		if (enter && mDocument.mNodes[id].mFirstChild != 0)
 			return mDocument.mNodes[id].mFirstChild;
 		var id;

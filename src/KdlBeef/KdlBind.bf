@@ -37,13 +37,16 @@ public struct KdlValueWriter
 		Argument,
 		Child,
 		/// The argument entry at position mIndex in Entries, or a new argument (mIndex -1)
-		Entry
+		Entry,
+		/// The first argument of mChild, a child of mNode named mName found already (or, invalid, to add)
+		KeyedChild
 	}
 
 	KdlNode mNode;
 	Target mTarget;
 	StringView mName;
 	int mIndex;
+	KdlNode mChild;
 
 	/// @brief The property `key` of `node` (for the document root, the child node `key`).
 	/// @param node The node.
@@ -94,6 +97,17 @@ public struct KdlValueWriter
 		return writer;
 	}
 
+	/// A dictionary entry `name value` whose node `child` was found by KdlKeyIndex (invalid: none yet).
+	internal static KdlValueWriter KeyedChild(KdlNode node, StringView name, KdlNode child)
+	{
+		KdlValueWriter writer = default;
+		writer.mNode = node;
+		writer.mTarget = .KeyedChild;
+		writer.mName = name;
+		writer.mChild = child;
+		return writer;
+	}
+
 	/// @brief Write `value`, keeping any annotation already there.
 	/// @param value The value.
 	public void Set(KdlValue value)
@@ -118,6 +132,9 @@ public struct KdlValueWriter
 		case .Property: mNode.RemoveProperty(mName);
 		case .Argument, .Entry: Write(.Null, false, default);
 		case .Child: KdlBind.RemoveChild(mNode, mName);
+		case .KeyedChild:
+			if (mChild.IsValid)
+				mChild.Remove();
 		}
 	}
 
@@ -136,6 +153,8 @@ public struct KdlValueWriter
 			mNode.WriteArgument(mIndex, value, hasAnnotation, annotation);
 		case .Child:
 			KdlBind.ChildNode(mNode, mName).WriteArgument(0, value, hasAnnotation, annotation);
+		case .KeyedChild:
+			(mChild.IsValid ? mChild : mNode.AddChild(mName)).WriteArgument(0, value, hasAnnotation, annotation);
 		case .Entry:
 			if (mNode.IsDocumentRoot)
 				Runtime.FatalError("[KdlObject] A document has no arguments: map the field with [KdlChild] or as a property");
@@ -146,6 +165,59 @@ public struct KdlValueWriter
 			else
 				mNode.AddArgument(value);
 		}
+	}
+}
+
+/// @brief The entry nodes of a dictionary's node, by key, for writing the dictionary in one pass (the
+/// writer looks each key up here rather than scanning the children). Used by generated code.
+public class KdlKeyIndex
+{
+	KdlNode mNode;
+	Dictionary<StringView, KdlNode> mEntries ~ delete _;
+
+	public this(KdlNode node)
+	{
+		mNode = node;
+		mEntries = new .();
+	}
+
+	/// @brief Index the entries, removing those whose keys `dictionary` no longer has and all but the
+	/// last of duplicate keys (the one reading used).
+	/// @param dictionary The dictionary being written.
+	public void Update<TValue>(Dictionary<String, TValue> dictionary)
+	{
+		mEntries.Clear();
+		var child = mNode.LastChild;
+		while (child.IsValid)
+		{
+			let previous = child.PreviousSibling;
+			// The name is document text (in its store), so the view outlives the removal
+			if (!dictionary.ContainsKeyAlt(child.Name) || !mEntries.TryAdd(child.Name, child))
+				child.Remove();
+			child = previous;
+		}
+	}
+
+	/// @brief The entry node for `key`, added at the end when there is none.
+	/// @param key The key.
+	/// @return The node.
+	public KdlNode Get(StringView key)
+	{
+		if (mEntries.TryGetValue(key, let found))
+			return found;
+		let added = mNode.AddChild(key);
+		mEntries[added.Name] = added;
+		return added;
+	}
+
+	/// @brief Where a scalar value for `key` goes: the entry node's argument, the node made when it is
+	/// written, removed when the value is (a null String).
+	/// @param key The key.
+	/// @return The writer.
+	public KdlValueWriter Value(StringView key)
+	{
+		mEntries.TryGetValue(key, var found);
+		return KdlValueWriter.KeyedChild(mNode, key, found);
 	}
 }
 
@@ -546,23 +618,6 @@ public static class KdlBind
 			return false;
 		value = Ref(entry, index, entry.Name);
 		return true;
-	}
-
-	/// @brief Remove the entry nodes of a dictionary's node whose keys the dictionary no longer has, and
-	/// all but the last of duplicate keys (the one reading used).
-	/// @param node The dictionary's node.
-	/// @param dictionary The dictionary being written.
-	public static void RemoveMissingKeys<TValue>(KdlNode node, Dictionary<String, TValue> dictionary)
-	{
-		let seen = scope HashSet<StringView>();
-		var child = node.LastChild;
-		while (child.IsValid)
-		{
-			let previous = child.PreviousSibling;
-			if (!dictionary.ContainsKeyAlt(child.Name) || !seen.Add(child.Name))
-				child.Remove();
-			child = previous;
-		}
 	}
 
 	/// @brief The number of child nodes named `name`.

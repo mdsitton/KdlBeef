@@ -84,10 +84,33 @@ public static class KdlSerializerCodeGen
 		// Over the whole [KdlObject] chain (a base's fields are read by its own KdlRead, called first, but
 		// they share the node): the first argument no [KdlArgument] field takes, for [KdlArguments]; and
 		// the child names the fields claim, which a [KdlChildren] list anywhere in the chain leaves alone
+		// The same pass rejects mappings that would read the same KDL twice: argument indices, a second
+		// [KdlArguments] or [KdlChildren], and two fields with one property key or child name.
 		int nextArgument = 0;
 		let claimed = scope String();
 		int claimedCount = 0;
 		int childrenLists = 0;
+		String argumentsField = null;
+		// The field that maps each argument index, property key and child name ("Type.Field")
+		let arguments = scope Dictionary<int, String>();
+		let properties = scope Dictionary<String, String>();
+		let children = scope Dictionary<String, String>();
+		defer
+		{
+			delete argumentsField;
+			for (let entry in arguments)
+				delete entry.value;
+			for (let entry in properties)
+			{
+				delete entry.key;
+				delete entry.value;
+			}
+			for (let entry in children)
+			{
+				delete entry.key;
+				delete entry.value;
+			}
+		}
 		for (Type level = type; level != null && level.HasCustomAttribute<KdlObjectAttribute>(); level = level.IsValueType ? null : level.BaseType)
 		{
 			var levelNaming = naming;
@@ -97,20 +120,45 @@ public static class KdlSerializerCodeGen
 			{
 				if (!IsSerialized(level, field))
 					continue;
+				let fieldPath = scope $"{level.GetFullName(.. scope .())}.{field.Name}";
+				// One role attribute per field
+				int roles = (field.HasCustomAttribute<KdlArgumentAttribute>() ? 1 : 0) + (field.HasCustomAttribute<KdlArgumentsAttribute>() ? 1 : 0) +
+					(field.HasCustomAttribute<KdlChildAttribute>() ? 1 : 0) + (field.HasCustomAttribute<KdlChildrenAttribute>() ? 1 : 0);
+				if (roles > 1)
+					FailType(ownerName, scope $"{fieldPath} has more than one of [KdlArgument], [KdlArguments], [KdlChild] and [KdlChildren]: a field has one place in a node");
+
 				if (field.GetCustomAttribute<KdlArgumentAttribute>() case .Ok(let argument))
+				{
+					if (argument.mIndex < 0)
+						FailType(ownerName, scope $"{fieldPath}: [KdlArgument({argument.mIndex})] needs an index of 0 or more");
+					if (arguments.TryGetValue(argument.mIndex, let other))
+						FailType(ownerName, scope $"argument {argument.mIndex} is mapped by both {other} and {fieldPath}");
+					arguments[argument.mIndex] = new .(fieldPath);
 					nextArgument = Math.Max(nextArgument, argument.mIndex + 1);
+				}
 				else if (field.HasCustomAttribute<KdlChildrenAttribute>())
 				{
 					if (++childrenLists > 1)
-						Fail(ownerName, field.Name, "only one [KdlChildren] list is allowed in a type and its [KdlObject] bases: both would read the same child nodes");
+						FailType(ownerName, scope $"{fieldPath}: only one [KdlChildren] list is allowed in a type and its [KdlObject] bases (both would read the same child nodes)");
 				}
-				else if (!field.HasCustomAttribute<KdlArgumentsAttribute>())
+				else if (field.HasCustomAttribute<KdlArgumentsAttribute>())
+				{
+					if (argumentsField != null)
+						FailType(ownerName, scope $"the arguments are mapped by both {argumentsField} and {fieldPath} ([KdlArguments])");
+					argumentsField = new .(fieldPath);
+				}
+				else
 				{
 					let names = scope List<String>();
 					defer { ClearAndDeleteItems!(names); }
 					ClaimedNames(field, levelNaming, names);
+					// Properties and child nodes are separate names in a node
+					let used = IsPropertyField(field) ? properties : children;
 					for (let claim in names)
 					{
+						if (used.TryGetValue(claim, let other))
+							FailType(ownerName, scope $"{(used == properties) ? "the property" : "the child node"} `{claim}` is mapped by both {other} and {fieldPath} (the name comes from [KdlName] or the field's name, or for a List of objects from the item type's node name)");
+						used[new .(claim)] = new .(fieldPath);
 						if (claimedCount++ > 0)
 							claimed.Append(", ");
 						AppendLiteral(claimed, claim);
@@ -274,6 +322,26 @@ public static class KdlSerializerCodeGen
 	static void Fail(StringView ownerName, StringView fieldName, StringView message)
 	{
 		Runtime.FatalError(scope $"[KdlObject] {ownerName}.{fieldName}: {message}");
+	}
+
+	/// A mapping error about the type as a whole: `message` names the fields (with their declaring types).
+	[Comptime]
+	static void FailType(StringView ownerName, StringView message)
+	{
+		Runtime.FatalError(scope $"[KdlObject] {ownerName}: {message}");
+	}
+
+	/// Whether a field without a role attribute is a property: a scalar (a converter's too), not a child
+	/// node ([KdlChild], objects, lists, dictionaries).
+	[Comptime]
+	static bool IsPropertyField(FieldInfo field)
+	{
+		if (field.HasCustomAttribute<KdlChildAttribute>())
+			return false;
+		let fieldType = field.FieldType;
+		if (field.HasCustomAttribute<KdlUseConverterAttribute>())
+			return ListElement(fieldType) == null && DictionaryValue(fieldType) == null;
+		return IsScalar(Classify(fieldType, ?));
 	}
 
 	/// The child names (and property keys, which are children at the document root) a field uses.
@@ -904,6 +972,7 @@ public static class KdlSerializerCodeGen
 
 	/// Writes a Dictionary<String, T> field into its child node in place: entries that stay keep their
 	/// position and comments, keys the dictionary no longer has are removed, new keys are appended.
+	/// Linear: the entry nodes are indexed by key once (KdlKeyIndex).
 	[Comptime]
 	static void EmitWriteDictionary(String code, StringView name, StringView key, List<String> aliases, Type valueType, Kind valueKind, Type valueConverter,
 		Type element, Kind elementKind, Type elementConverter, StringView elementName, KdlNaming naming)
@@ -911,17 +980,18 @@ public static class KdlSerializerCodeGen
 		for (let alias in aliases)
 			code.AppendF("\tKdlBeef.KdlBind.RenameChildAlias(_node, {}, {});\n", key, alias);
 		code.AppendF("\tif (this.{0} == null)\n\t\tKdlBeef.KdlBind.RemoveChild(_node, {1});\n\telse\n\t{{\n", name, key);
-		code.AppendF("\t\tlet _dn = KdlBeef.KdlBind.ChildNode(_node, {0});\n\t\tKdlBeef.KdlBind.RemoveMissingKeys(_dn, this.{1});\n\t\tfor (let _kv in this.{1})\n\t\t{{\n", key, name);
+		// The entries by key, found once (gone keys removed), so each key's node is a lookup
+		code.AppendF("\t\tlet _index = scope KdlBeef.KdlKeyIndex(KdlBeef.KdlBind.ChildNode(_node, {0}));\n\t\t_index.Update(this.{1});\n\t\tfor (let _kv in this.{1})\n\t\t{{\n", key, name);
 		switch (valueKind)
 		{
 		case .Object:
 			if (valueType.IsValueType)
-				code.Append("\t\t\tTry!(_kv.value.KdlWrite(KdlBeef.KdlBind.ChildNode(_dn, _kv.key)));\n");
+				code.Append("\t\t\tTry!(_kv.value.KdlWrite(_index.Get(_kv.key)));\n");
 			else
-				code.Append("\t\t\tif (_kv.value == null)\n\t\t\t\tKdlBeef.KdlBind.RemoveChild(_dn, _kv.key);\n\t\t\telse\n\t\t\t\tTry!(_kv.value.KdlWrite(KdlBeef.KdlBind.ChildNode(_dn, _kv.key)));\n");
+				code.Append("\t\t\tif (_kv.value == null)\n\t\t\t\t_index.Value(_kv.key).Remove();\n\t\t\telse\n\t\t\t\tTry!(_kv.value.KdlWrite(_index.Get(_kv.key)));\n");
 		case .List:
-			code.Append("\t\t\tif (_kv.value == null)\n\t\t\t{\n\t\t\t\tKdlBeef.KdlBind.RemoveChild(_dn, _kv.key);\n\t\t\t\tcontinue;\n\t\t\t}\n");
-			code.Append("\t\t\tlet _de = KdlBeef.KdlBind.ChildNode(_dn, _kv.key);\n");
+			code.Append("\t\t\tif (_kv.value == null)\n\t\t\t{\n\t\t\t\t_index.Value(_kv.key).Remove();\n\t\t\t\tcontinue;\n\t\t\t}\n");
+			code.Append("\t\t\tlet _de = _index.Get(_kv.key);\n");
 			if (elementKind == .Object)
 			{
 				code.AppendF("\t\t\tvar _cc = KdlBeef.KdlChildCursor(_de, {});\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{{\n", elementName);
@@ -936,7 +1006,7 @@ public static class KdlSerializerCodeGen
 				code.Append("\t\t\t}\n\t\t\t_ac.Trim();\n");
 			}
 		default:
-			code.Append("\t\t\tlet _w = KdlBeef.KdlValueWriter.Child(_dn, _kv.key);\n");
+			code.Append("\t\t\tlet _w = _index.Value(_kv.key);\n");
 			EmitSet(code, "\t\t\t", "_kv.value", valueType, valueKind, valueConverter, naming);
 		}
 		code.Append("\t\t}\n\t}\n");

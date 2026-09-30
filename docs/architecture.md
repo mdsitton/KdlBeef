@@ -215,7 +215,11 @@ links are read together.
 properties read and write the record. The generation changes on every `Clear` and `Read`, so a
 handle from before is invalid even though its ID now names another node; a removed node (phase 5)
 will be flagged in its record, its slot not reused until `Clear`. Navigation properties return invalid
-handles where there is no node; anything else on an invalid handle is a fatal error.
+handles where there is no node; anything else on an invalid handle is a fatal error. The views over
+a node (`Children`, `Nodes`, `Entries`, `Named`, `Descendants` and their enumerators) are live and
+follow the same rule: each keeps the generation it was made in (and its node), `IsValid` tells, and
+using a stale one is a fatal error (`KdlDocument.CheckView`) instead of showing another document's
+nodes.
 
 Lookups (`KdlNode.Lookup.bf`) are API, not a query language (the author found KQL's selector syntax
 hard to use; `plan.md` §6): typed getters for properties (by key) and arguments (by index),
@@ -372,9 +376,10 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   contents (deleting owned keys and values on a heap read), adds each entry through `TryAddAlt` (the
   key String is allocated only for a new key; a duplicate key's old value is deleted, so the last one
   wins) and reads the value in place through the value pointer. Writing works in place:
-  `RemoveMissingKeys` drops entry nodes whose keys are gone (and all but the last duplicate), kept
+  entry nodes whose keys are gone are dropped (and all but the last duplicate), kept
   entries are rewritten where they are (comments and number bases stay), new keys are appended in
-  the dictionary's iteration order. Other key types, dictionaries of dictionaries and of lists of
+  the dictionary's iteration order. `KdlKeyIndex` does the removal and indexes the kept entry nodes
+  by key in one pass, so writing is linear (64,000 keys in about 7 ms). Other key types, dictionaries of dictionaries and of lists of
   lists stop the build.
 - **Whole documents** go through `KdlDocument.Root`, a valid handle for the document itself (no
   name or entries; its children are the top-level nodes). There, properties are `name value`
@@ -397,6 +402,11 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   each level with its own naming. A class's claimed names are a `protected virtual
   KdlClaimedChildNames` property that subclasses override, so a base's `[KdlChildren]` list also
   leaves alone the children a subclass's fields claim. One `[KdlChildren]` list per chain.
+- **Mapping checks.** The same pass over the chain stops the build, naming the fields and their
+  declaring types, for anything that would read the same KDL twice: a negative or repeated
+  `[KdlArgument]` index, a second `[KdlArguments]` or `[KdlChildren]`, more than one role attribute
+  on a field, and two properties or two child nodes with one name (aliases and a List of objects'
+  item name included). A property and a child node may share a name: they are different places.
 - **Converters** (`IKdlConverter<T>`, `[KdlConverter(typeof(T))]`, `[KdlUseConverter]`) read a
   `KdlValueRef` (so they see the annotation: `(px)12`) and write through the `KdlValueWriter`.
 - **Ownership** as TomlBeef: a null String, object or List field gets a new instance on read (from the

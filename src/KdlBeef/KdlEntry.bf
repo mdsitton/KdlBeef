@@ -40,27 +40,44 @@ public struct KdlEntry
 	}
 }
 
-/// A node's arguments and properties, in order.
+/// A node's arguments and properties, in order: a live view, valid while the node is in the document
+/// (using it after the document is read again or cleared, or the node removed, is a fatal error).
 public struct KdlEntryList : IEnumerable<KdlEntry>
 {
 	KdlDocument mDocument;
 	uint32 mNode;
+	uint32 mGeneration;
 
 	internal this(KdlDocument document, uint32 node)
 	{
 		mDocument = document;
 		mNode = node;
+		mGeneration = document.mGeneration;
+	}
+
+	/// @brief Whether the view can still be used: its document was not read again or cleared, and its
+	/// node was not removed.
+	public bool IsValid => mDocument != null && mGeneration == mDocument.mGeneration && mDocument.IsLive(mNode);
+
+	/// The node's record, after checking the view is still valid
+	ref KdlNodeRecord Node
+	{
+		get
+		{
+			mDocument.CheckView(mGeneration, mNode);
+			return ref mDocument.mNodes[mNode];
+		}
 	}
 
 	/// @brief The number of entries.
-	public int Count => mDocument.mNodes[mNode].mEntryCount;
+	public int Count => Node.mEntryCount;
 
 	/// @brief The entry at a position.
 	public KdlEntry this[int index]
 	{
 		get
 		{
-			ref KdlNodeRecord node = ref mDocument.mNodes[mNode];
+			ref KdlNodeRecord node = ref Node;
 			Runtime.Assert((uint)index < (uint)node.mEntryCount);
 			return .(mDocument, node.mEntryStart + (int32)index);
 		}
@@ -68,7 +85,7 @@ public struct KdlEntryList : IEnumerable<KdlEntry>
 
 	public Enumerator GetEnumerator()
 	{
-		ref KdlNodeRecord node = ref mDocument.mNodes[mNode];
+		ref KdlNodeRecord node = ref Node;
 		return .(mDocument, node.mEntryStart, node.mEntryStart + node.mEntryCount);
 	}
 
@@ -77,18 +94,21 @@ public struct KdlEntryList : IEnumerable<KdlEntry>
 		KdlDocument mDocument;
 		int32 mNext;
 		int32 mEnd;
+		uint32 mGeneration;
 
 		internal this(KdlDocument document, int32 start, int32 end)
 		{
 			mDocument = document;
 			mNext = start;
 			mEnd = end;
+			mGeneration = document.mGeneration;
 		}
 
 		public Result<KdlEntry> GetNext() mut
 		{
 			if (mNext >= mEnd)
 				return .Err;
+			mDocument.CheckView(mGeneration, 0);
 			return KdlEntry(mDocument, mNext++);
 		}
 	}

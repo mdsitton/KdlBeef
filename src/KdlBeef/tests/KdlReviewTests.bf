@@ -7,6 +7,16 @@ namespace KdlBeef.Tests;
 
 // Types for the typed-mapping regressions (R7, R9)
 
+/// Builds: a property and a child node may share a name (the mapping checks reject two properties, or
+/// two children, with one name; argument indices that repeat or are negative; several role attributes
+/// on a field; a second [KdlArguments] or [KdlChildren] in a chain; see architecture.md §6)
+[KdlObject]
+class FineSameName
+{
+	public int32 Color;
+	[KdlChild, KdlName("color")] public int32 ColorChild;
+}
+
 [KdlObject]
 class ReviewProbe
 {
@@ -595,6 +605,52 @@ static class KdlReviewTests
 		let output = scope String();
 		Test.Assert(KdlSerializer.Write(holder, output) case .Ok);
 		Test.Assert(output == items);
+	}
+
+	// Dictionaries are written through a key index: many keys, null values, removed and duplicate keys
+
+	[Test]
+	public static void Dictionaries_LargeWritesAndNulls()
+	{
+		let config = scope Config();
+		config.Env = new .();
+		config.Servers = new .();
+		for (int i < 3000)
+		{
+			config.Env.Add(new $"k{i}", new $"v{i}");
+			config.Servers.Add(new $"s{i}", new Server() { Port = (int32)i });
+		}
+		let doc = scope KdlDocument();
+		Test.Assert(config.KdlWrite(doc.Root) case .Ok);
+		Test.Assert(doc.Root.Find("env").ChildCount == 3000 && doc.Root.Find("servers").ChildCount == 3000);
+		Test.Assert(doc.Root.Find("env").Find("k2999").GetString(0) == "v2999");
+
+		// Null values remove their entries; removed keys go; a new key appends; the rest stay in place
+		delete config.Env["k5"];
+		config.Env["k5"] = null;
+		delete config.Servers["s7"];
+		config.Servers["s7"] = null;
+		if (config.Env.GetAndRemoveAlt("k6") case .Ok(let removed))
+		{
+			delete removed.key;
+			delete removed.value;
+		}
+		config.Env.Add(new .("new"), new .("n"));
+		config.Env["k0"].Set("changed");
+		Test.Assert(config.KdlWrite(doc.Root) case .Ok);
+		let env = doc.Root.Find("env");
+		Test.Assert(env.ChildCount == 2999 && !env.Find("k5").IsValid && !env.Find("k6").IsValid);
+		Test.Assert(env.FirstChild.Name == "k0" && env.FirstChild.GetString(0) == "changed" && env.LastChild.Name == "new");
+		Test.Assert(doc.Root.Find("servers").ChildCount == 2999 && !doc.Root.Find("servers").Find("s7").IsValid);
+
+		// Duplicate keys in the document: the last is kept and updated, the others removed
+		let dup = scope KdlDocument();
+		Test.Assert(dup.Read("env { a \"1\"; b \"2\"; a \"3\" }") case .Ok);
+		let small = scope Config();
+		Test.Assert(small.KdlRead(dup.Root) case .Ok && small.Env["a"] == "3");
+		small.Env["a"].Set("4");
+		Test.Assert(small.KdlWrite(dup.Root) case .Ok);
+		Test.Assert(dup.Root.Find("env").ChildCount == 2 && dup.Root.Find("env").LastChild.GetString(0) == "4", dup.Write(.. scope .()));
 	}
 
 	// Decimal big integers are normalized directly
