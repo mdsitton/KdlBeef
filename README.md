@@ -18,11 +18,16 @@ if (doc.ReadFile("ui.kdl") case .Err(let error))
     Console.WriteLine(error.ToString(.. scope .()));   // ui.kdl:12:5: Expected ...
 for (let node in doc.Nodes)
 {
-    if (node.Name == "button" && node.TryGetProperty("on-click", let handler) && handler case .String(let name))
-        Console.WriteLine(name);
+    if (node.Name == "button" && node.TryGetString("on-click", let handler))
+        Console.WriteLine(handler);
     node.SetProperty("enabled", .Bool(true));
 }
 let text = doc.Write(.. scope .());                    // as it was, with the edits
+
+// Lookups chain; a missing node or value gives the fallback
+let columns = doc.Root.Find("window").Find("grid").GetInt64("columns", 1);
+for (let button in doc.Root.Descendants.Named("button"))   // the whole tree; Children.Named for one level
+    Console.WriteLine(button.GetString(0));
 
 let reader = scope KdlReader(text);                     // or events, without a document
 while (reader.Next() case .Ok(let event) && event != .EndOfDocument) {}

@@ -169,4 +169,92 @@ static class KdlDocumentTests
 
 			""");
 	}
+
+	[Test]
+	public static void Lookup_TypedValues()
+	{
+		let doc = ReadOrFail(scope KdlDocument(), "button \"Save\" 3 1.5 #true width=120 scale=2 on-click=save enabled=#false width=140");
+		let button = doc.Root.Find("button");
+
+		// Properties: the last duplicate wins; integers read as doubles; wrong types fail
+		Test.Assert(button.TryGetInt64("width", let width) && width == 140);
+		Test.Assert(button.TryGetString("on-click", let handler) && handler == "save");
+		Test.Assert(button.TryGetBool("enabled", let enabled) && !enabled);
+		Test.Assert(button.TryGetDouble("scale", let scale) && scale == 2);
+		Test.Assert(!button.TryGetString("width", ?) && !button.TryGetInt64("on-click", ?) && !button.TryGetBool("missing", ?));
+		Test.Assert(button.GetInt64("width", 80) == 140 && button.GetInt64("height", 80) == 80);
+		Test.Assert(button.GetString("on-click") == "save" && button.GetString("width", "none") == "none");
+		Test.Assert(button.GetBool("enabled", true) == false && button.GetDouble("missing", 0.5) == 0.5);
+
+		// Arguments by position
+		Test.Assert(button.GetString(0) == "Save" && button.GetInt64(1) == 3 && button.GetDouble(2) == 1.5);
+		Test.Assert(button.TryGetBool(3, let flag) && flag);
+		Test.Assert(!button.TryGetInt64(0, ?) && !button.TryGetString(4, ?) && button.GetInt64(9, -1) == -1);
+	}
+
+	[Test]
+	public static void Lookup_FindChains()
+	{
+		let doc = ReadOrFail(scope KdlDocument(), "window {\n    grid columns=3 {\n        button \"A\"\n    }\n}");
+		Test.Assert(doc.Root.Find("window").Find("grid").GetInt64("columns", 1) == 3);
+		Test.Assert(doc.Root.Find("window").Find("grid").Find("button").GetString(0) == "A");
+
+		// A missing link gives the empty handle, and every later lookup its fallback
+		let missing = doc.Root.Find("dialog").Find("grid");
+		Test.Assert(!missing.IsValid);
+		Test.Assert(missing.GetInt64("columns", 1) == 1 && missing.GetString(0, "none") == "none");
+		Test.Assert(!missing.TryGetBool("visible", ?) && !missing.Find("button").IsValid);
+	}
+
+	[Test]
+	public static void Lookup_NamedAndDescendants()
+	{
+		StringView input = """
+			window {
+			    row {
+			        button "A"
+			        label "x"
+			        button "B"
+			        column {
+			            button "C"
+			            slider
+			        }
+			    }
+			    button "D"
+			}
+			status
+			""";
+		let doc = ReadOrFail(scope KdlDocument(), input);
+		let window = doc.Root.Find("window");
+		let row = window.Find("row");
+
+		// Children with one name, in order
+		let names = scope String();
+		for (let button in row.Children.Named("button"))
+			names.Append(button.GetString(0));
+		Test.Assert(names == "AB");
+		Test.Assert(row.Children.Named("button").Count == 2 && row.Children.Named("label").First.GetString(0) == "x");
+		Test.Assert(row.Children.Named("missing").Count == 0 && !row.Children.Named("missing").First.IsValid);
+
+		// The whole subtree, depth first in document order
+		let order = scope String();
+		for (let node in window.Descendants)
+			order.AppendF("{} ", node.Name);
+		Test.Assert(order == "row button label button column button slider button ", order);
+		Test.Assert(window.Descendants.Count == 8 && doc.Root.Descendants.Count == 10);
+
+		names.Clear();
+		for (let button in window.Descendants.Named("button"))
+			names.Append(button.GetString(0));
+		Test.Assert(names == "ABCD");
+		Test.Assert(window.Descendants.Find("slider").Parent.Name == "column");
+		Test.Assert(window.Descendants.Named("button").First.GetString(0) == "A");
+		Test.Assert(!window.Descendants.Find("status").IsValid && doc.Root.Descendants.Find("status").IsValid);
+		Test.Assert(doc.Root.Find("status").Descendants.Count == 0 && !doc.Root.Find("status").Descendants.First.IsValid);
+
+		// Removing the current node while walking Named siblings is allowed
+		for (let button in row.Children.Named("button"))
+			button.Remove();
+		Test.Assert(row.Children.Named("button").Count == 0 && row.ChildCount == 2);
+	}
 }

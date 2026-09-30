@@ -26,6 +26,7 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 | `KdlReadConfig.bf` | `KdlMetadataMode` and `KdlReadConfig` (source name, limits) |
 | `KdlSourceRange.bf` | `KdlSourceRange`: a node's or entry's source line, column, offset and length |
 | `KdlNode.bf` | `KdlNodeId`, the `KdlNode` handle (name, annotation, navigation, argument and property lookups), `KdlNodeList` (children or top-level nodes) |
+| `KdlNode.Lookup.bf` | Typed argument and property getters, chainable `Find`, `KdlNamedNodes` (`Children.Named`) and `KdlDescendants` |
 | `KdlEntry.bf` | `KdlEntry` (an argument or property view) and `KdlEntryList` |
 | `KdlDocument.Style.bf` | `extension KdlDocument`: PreserveStyle's `KdlNodeStyle`/`KdlEntryStyle` records, capture during a read, the preserving writer, styled value regeneration |
 | `KdlDocument.Mutation.bf` | `extension KdlDocument`: `AddNode`, links, removal, entry growth and the per-entry side tables |
@@ -201,6 +202,14 @@ properties read and write the record. The generation changes on every `Clear` an
 handle from before is invalid even though its ID now names another node; a removed node (phase 5)
 will be flagged in its record, its slot not reused until `Clear`. Navigation properties return invalid
 handles where there is no node; anything else on an invalid handle is a fatal error.
+
+Lookups (`KdlNode.Lookup.bf`) are API, not a query language (the author found KQL's selector syntax
+hard to use; `plan.md` §6): typed getters for properties (by key) and arguments (by index),
+`TryGet…(…, out)` and `Get…(…, fallback)` as in TomlBeef's tables; `Find(name)` for the first child;
+`Children.Named(name)` and `Descendants` (depth first, document order, optionally `.Named`), both
+walking the sibling links with no allocation. `Find` and the getters treat the default handle, which a
+failed `Find` returns, as "no node", so chains end in the fallback instead of a fatal error; a stale
+handle (removed node, cleared document) is still fatal, since it is a bug rather than absent data.
 
 ### Entries
 

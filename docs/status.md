@@ -6,13 +6,13 @@ Last reviewed: 2026-09-29.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 49/49 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 49/49 pass |
+| `beefbuild -test` (Debug checks) | 52/52 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 52/52 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 49/49 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 52/52 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 16 implementations on 6 inputs (knus on KDL v1 translations in `inputs/v1/`); results in `bench/compare/results.md`; `bench/compare/plot.py` redraws the README charts (`docs/benchmark*.svg`) from it and `typed-results.md` |
 
@@ -52,7 +52,7 @@ Any change to `.bf` files must keep these green in both Debug and Release.
 | Pull reader (`KdlReader`) | Done: full KDL 2.0.0 grammar, validation (UTF-8, banned code points), slashdash, all string and number forms, located errors; in-memory text or a `Stream` through a buffer (`KdlReaderCore<TCursor>`). See `docs/architecture.md` §3 |
 | Streams | `KdlReader.Reset(Stream)`, `KdlDocument.Read(Stream)`, `ReadFile` streaming with `StreamBufferBytes`; memory bounded by the buffer and the longest construct (`MaxTokenBytes`); same documents, errors and positions as in memory (the suite through a 16-byte buffer; tests with 1-byte reads, I/O failure, limits). End to end about 16% slower than in memory on the HTML standard |
 | Canonical formatting (`KdlCanonical.Format`) | Done from events; byte-exact on the whole suite |
-| Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups, canonical `Write`; byte-exact on the whole suite. Mutation: add, insert, move, remove nodes; add, set, remove arguments and properties (see `architecture.md` §4). No property hash index yet |
+| Document (`KdlDocument`, `KdlNode`, `KdlEntry`) | Read (text, bytes, file), navigation, argument and property lookups (typed getters with fallbacks, chainable `Find`, `Children.Named`, `Descendants`), canonical `Write`; byte-exact on the whole suite. Mutation: add, insert, move, remove nodes; add, set, remove arguments and properties (see `architecture.md` §4). No property hash index yet |
 | `KdlTester` | Prints the canonical form of a file or stdin through a document, with `-events` straight from the reader, with `-stream N` through a Stream and an N-byte buffer; exit 1 on invalid input; `-bench` for `bench/compare` |
 | Read config, limits, positions | `KdlReadConfig`: source name, MaxDepth (256), MaxInputBytes, MaxNodes, MaxEntriesPerNode, MaxStringBytes (enforced by the reader, so for events too); `KdlMetadataMode.Positions` with `TryGetSourceRange` on nodes and entries |
 | Error messages | Located, with the source name; worded for the likely cause (`r"…"` is KDL 1, `#` inside an identifier, a slashdash after a type annotation, …); golden files for all 95 `_fail` cases |
@@ -74,5 +74,6 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 ## Suggested order
 
 Everything in the plan's must-have scope is done. What is left is refinement (P3, P5, P6 rows) and
-phase 7 extras (`plan.md` §6: KQL, JSON-in-KDL; v1 input and a streaming writer are out), to pick up
+more lookup API if the UI framework asks for it (phase 7's KQL, JSON-in-KDL, v1 input and streaming
+writer are dropped, `plan.md` §6), to pick up
 when the UI framework needs them.

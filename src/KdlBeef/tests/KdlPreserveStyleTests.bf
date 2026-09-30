@@ -32,8 +32,8 @@ static class KdlPreserveStyleTests
 		int handlers = 0;
 		for (let node in doc.Nodes)
 		{
-			if (node.Name == "button" && node.TryGetProperty("on-click", let handler) && handler case .String(let name))
-				handlers += name == "save" ? 1 : 0;
+			if (node.Name == "button" && node.TryGetString("on-click", let handler))
+				handlers += handler == "save" ? 1 : 0;
 			node.SetProperty("enabled", .Bool(true));
 		}
 		Test.Assert(handlers == 1);

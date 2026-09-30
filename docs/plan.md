@@ -345,8 +345,9 @@ round-trips byte for byte; edits keep neighboring formatting.
 `bench/compare/typed.sh` (`typed-results.md`).*
 Port the TomlBeef generator with KDL roles; typed benchmark against kdl-rs serde, gokdl2 and KdlSharp.
 
-**Phase 7 — Extras as needed.** KQL, JSON-in-KDL. (Dropped 2026-09-30: v1 input, and the streaming
-`KdlWriter`, which TomlBeef has no equivalent of.)
+**Phase 7 — Extras.** *Dropped (2026-09-30):* v1 input; the streaming `KdlWriter` (TomlBeef has no
+equivalent); KQL (the author prefers API lookups to a selector language: typed getters, chainable
+`Find`, `Children.Named`, `Descendants`, see `architecture.md` §4); JSON-in-KDL (no use for it).
 
 ## 7. Testing
 
