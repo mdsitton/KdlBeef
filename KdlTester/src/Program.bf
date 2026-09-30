@@ -23,10 +23,20 @@ namespace KdlTester;
 ///   KdlTester -bench-events <parse|write> <file> <min-samples>
 ///                                the event reader's row in run.sh: parse is the events pass, write
 ///                                exits 3 (n/a)
+///   KdlTester -bench-lookup [min-samples]
+///                                ns per property lookup on nodes of 4 to 64 properties
 class Program
 {
 	public static int Main(String[] args)
 	{
+		if (args.Count > 0 && args[0] == "-bench-lookup")
+		{
+			int samples = 5;
+			if (args.Count >= 2 && int.Parse(args[1]) case .Ok(let parsed))
+				samples = parsed;
+			BenchLookup(samples);
+			return 0;
+		}
 		if (args.Count > 0 && args[0] == "-bench-typed")
 		{
 			// bench/compare/typed.sh: one operation per run
@@ -220,6 +230,58 @@ class Program
 
 	/// ui.kdl into the [KdlObject] types of TypedUi.bf: reading (parse and bind, and binding alone from
 	/// a parsed document) and writing (a new document from the objects, then its text).
+	/// Property lookups (plan.md §4.3: the index waits for this to show a need): ns per TryGetProperty
+	/// that finds its key (keys picked at random) and per one that does not, on 1,000 nodes of 4 to 64
+	/// properties each, under the measurement rule of run.sh.
+	static void BenchLookup(int minSamples)
+	{
+		const int cLookups = 100000;
+		for (let count in int[](4, 8, 16, 32, 64))
+		{
+			let text = scope String();
+			for (int n < 1000)
+			{
+				text.Append("node");
+				for (int p < count)
+					text.AppendF(" property-{}={}", p, p);
+				text.Append('\n');
+			}
+			let doc = scope KdlDocument();
+			if (doc.Read(text) case .Err)
+				return;
+			let keys = scope List<String>();
+			defer { ClearAndDeleteItems!(keys); }
+			for (int p < count)
+				keys.Add(new $"property-{p}");
+			let nodes = scope List<KdlNode>();
+			for (let node in doc.Nodes)
+				nodes.Add(node);
+			let random = scope Random(1);
+			let order = scope List<int>();
+			for (int i < cLookups)
+				order.Add(random.Next(0, count));
+
+			int64 sum = 0;
+			let hit = Measure(minSamples, scope [&]() =>
+			{
+				for (int i < cLookups)
+				{
+					if (nodes[i % nodes.Count].TryGetProperty(keys[order[i]], let value) && value case .Integer(let v, ?))
+						sum += v;
+				}
+			});
+			let miss = Measure(minSamples, scope [&]() =>
+			{
+				for (int i < cLookups)
+				{
+					if (nodes[i % nodes.Count].HasProperty("absent"))
+						sum++;
+				}
+			});
+			Console.WriteLine($"{count,3} properties: found {hit.mMedianNs / cLookups:F1} ns, absent {miss.mMedianNs / cLookups:F1} ns per lookup (check {sum})");
+		}
+	}
+
 	static int BenchTyped(StringView input, KdlDocument doc, int minSamples)
 	{
 		let ui = scope UiDocument();

@@ -29,6 +29,28 @@ internal static class KdlChar
 		return table;
 	}
 
+	/// Identifier scanning by byte: 0 stops (not an identifier character), 1 continues (an ASCII one),
+	/// 2 starts a non-ASCII code point to decode. One lookup per byte in ScanIdentifier's loop.
+	static uint8[256] sIdentifierByte = BuildIdentifierByte();
+
+	static uint8[256] BuildIdentifierByte()
+	{
+		uint8[256] table = default;
+		for (int i < 128)
+			table[i] = sIdentifierAscii[i] ? 1 : 0;
+		for (int i = 128; i < 256; i++)
+			table[i] = 2;
+		return table;
+	}
+
+	/// @return 0: not an identifier byte; 1: an ASCII identifier character; 2: the start (or middle) of
+	/// a non-ASCII code point, to be decoded.
+	[Inline]
+	public static uint8 IdentifierByteClass(char8 c)
+	{
+		return sIdentifierByte[(uint8)c];
+	}
+
 	[Inline]
 	public static bool IsDigit(char8 c)
 	{

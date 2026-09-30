@@ -43,6 +43,8 @@ internal struct KdlNodeRecord
 	public KdlNodeFlags mFlags;
 }
 
+/// An argument or property. (A packed 48-byte form, with the value rebuilt from a tag on every read,
+/// was measured slower on every input: numbers read 142 → 129 MB/s, written 321 → 187.)
 internal struct KdlEntryRecord
 {
 	public StringView mKey;

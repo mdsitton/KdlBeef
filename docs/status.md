@@ -18,16 +18,22 @@ Last reviewed: 2026-09-30. The deep review and reproduced issues are in [review.
 
 ## Performance baseline
 
-`bench/compare/results.md` (MB/s; the benchmark rule of `run.sh`):
+`KdlTester -bench` on `bench/compare/inputs` (MB/s, the benchmark rule of `run.sh`, 2026-09-30;
+`results.md` has the earlier run beside the other implementations):
 
 | | ui | config | strings | numbers | html-standard | html-standard-compact |
 |---|---:|---:|---:|---:|---:|---:|
-| Document read | 250 | 209 | 291 | 139 | 233 | 232 |
-| Event pass (`KdlReader`) | 320 | 299 | 341 | 178 | 306 | 311 |
-| Canonical write (MB/s of output) | 330 | 375 | 471 | 321 | 403 | 407 |
+| Document read | 265 | 227 | 297 | 146 | 241 | 255 |
+| Event pass (`KdlReader`) | 318 | 294 | 336 | 166 | 302 | 325 |
+| Canonical write (MB/s of output) | 343 | 393 | 542 | 328 | 406 | 430 |
 
-(From memory. The stream cursor cost the in-memory path about 5%: before it, the document read was
-230–299 and the event pass 307–345.)
+(From memory. The one-pass number fast path, `TryParsePlainNumber`, raised document reads 3–9%;
+the event pass is within noise of before. Single runs vary by a few percent.)
+
+Property lookups (`KdlTester -bench-lookup`): 28 ns per lookup that finds its key on a node of 4
+properties, 43 at 8, 64 at 16, 97 at 32, 164 at 64 (a miss: 9 to 81 ns). A hash index would cost
+about 15–20 ns per lookup plus memory per document, so it would only pay past about 30 properties;
+it is not built (`plan.md` §4.3's condition is not met).
 
 Typed (`KdlTester -bench typed bench/compare/inputs/ui.kdl 5`: the 5 MB UI markup into the
 `[KdlObject]` types of `KdlTester/src/TypedUi.bf`, 63,681 widgets through polymorphic
@@ -39,9 +45,11 @@ KdlSharp 324; writes take 125, 153 and 196 ms. None of them keeps an ordered mix
 the `(px)` annotations without help.
 
 The fastest other implementation reads 33–49 MB/s (ckdl, events only) and writes up to 356 MB/s
-(kdl-rs, strings). `numbers` is below the plan's 150 MB/s document target: after the number fast
-paths it spends its time in the digit loops of hex/octal/binary and underscored tokens and in copying
-float lexemes into the document (the canonical form needs them).
+(kdl-rs, strings). `numbers` (146 MB/s) stays a little below the plan's 150 MB/s document target: its
+time is in the exact float division of Clinger's fast path, the digit loops of hex/octal/binary and
+underscored tokens, copying float lexemes (the canonical form needs them) and writing 72-byte entry
+records. A packed 48-byte record was tried and measured slower (numbers 129 MB/s): rebuilding the
+value on every read costs more than the memory it saves.
 
 Any change to `.bf` files must keep these green in both Debug and Release.
 
@@ -67,7 +75,6 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 | ID | Item | Size |
 |----|------|------|
 | R | [Deep review](review.md) follow-ups (R1-R9, the quadratic typed lists, decimal big integers and idle-whitespace retention are fixed, see its *Resolution*): splitting `ReadNext` along its responsibilities (normal parsing, slashdash suppression, recovery, source capture; its invariants are now stated on `KdlReaderCore`), measured against the hot paths; the review's API additions | M |
-| P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
@@ -75,6 +82,6 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 The plan's must-have features are implemented, and the deep review's confirmed bugs (R1-R9) and
 measured quadratic paths are fixed, each with a regression test (`tests/KdlReviewTests.bf`). The
-review's remaining recommendations (the R row) and the planned refinements (P3, P5) and more
+review's remaining recommendations (the R row) and the planned refinements (P5) and more
 lookup API can follow as the UI framework needs them. Phase 7's KQL, JSON-in-KDL, v1 input and streaming writer remain dropped
 (`plan.md` §6).

@@ -55,14 +55,15 @@ extension KdlReaderCore<TCursor>
 		int i = pos;
 		while (Avail(i))
 		{
-			char8 b = mData[i];
-			if ((uint8)b < 0x80)
+			// One lookup: stop, an ASCII identifier character, or a code point to decode
+			uint8 kind = KdlChar.IdentifierByteClass(mData[i]);
+			if (kind == 1)
 			{
-				if (!KdlChar.IsIdentifierAscii(b))
-					break;
 				i++;
 				continue;
 			}
+			if (kind == 0)
+				break;
 			char32 cp = DecodeAt(i, let length);
 			if (!KdlChar.IsIdentifierChar(cp))
 				break;
@@ -123,12 +124,10 @@ extension KdlReaderCore<TCursor>
 	/// Parses a bare token that starts like a number.
 	Result<KdlValue, KdlFailure> ParseNumber(StringView token, int offset)
 	{
-		// The common forms first; anything else (radixes, underscores, long or invalid tokens) falls
-		// through to the full parse below, so errors are unchanged
-		if (TryParsePlainInteger(token, var plainInteger))
-			return .Ok(.Integer(plainInteger, token));
-		if (TryParsePlainFloat(token, var plainFloat))
-			return .Ok(.Float(plainFloat, token));
+		// The common forms first, in one pass; anything else (radixes, underscores, long or invalid
+		// tokens) falls through to the full parse below, so errors are unchanged
+		if (TryParsePlainNumber(token, var plain))
+			return .Ok(plain);
 
 		char8* p = token.Ptr;
 		int n = token.Length;
@@ -231,44 +230,20 @@ extension KdlReaderCore<TCursor>
 		}
 	}
 
-	/// One-pass parse of an optional sign and 1–18 decimal digits (leading zeros allowed, as in KDL):
-	/// valid as written and unable to overflow int64. Anything else returns false and takes the full
-	/// path. (TomlBeef's TryParsePlainInteger.)
+	/// One-pass parse of the common numbers, `[sign]digits[.digits][(e|E)[sign]digits]` without
+	/// underscores:
+	/// - an integer of 1–18 digits (leading zeros allowed, as in KDL), valid as written and unable to
+	///   overflow int64 (TomlBeef's TryParsePlainInteger);
+	/// - a decimal with a fraction or exponent whose digits fit an exact double mantissa (at most 2^53,
+	///   19 digits) and whose decimal exponent is within ±22: then mantissa and power of ten are both
+	///   exact, and one IEEE multiply or divide rounds correctly (Clinger's fast path), bit-identical to
+	///   Double.Parse (TomlBeef's TryParsePlainFloat, with KDL's grammar).
+	/// Anything else (a radix, underscores, more digits, a larger exponent, anything invalid) returns false
+	/// and takes the full path. The integer part is scanned once for both.
 	[Inline]
-	static bool TryParsePlainInteger(StringView token, out int64 value)
+	static bool TryParsePlainNumber(StringView token, out KdlValue value)
 	{
-		value = 0;
-		char8* ptr = token.Ptr;
-		int length = token.Length;
-		int pos = (ptr[0] == '-' || ptr[0] == '+') ? 1 : 0;
-		int digits = length - pos;
-		if (digits < 1 || digits > 18)
-			return false;
-		int64 result = 0;
-		for (int i = pos; i < length; i++)
-		{
-			uint8 digit = (uint8)ptr[i] - (uint8)'0';
-			if (digit > 9)
-				return false;
-			result = result * 10 + digit;
-		}
-		value = (ptr[0] == '-') ? -result : result;
-		return true;
-	}
-
-	/// Powers of ten that a double holds exactly (5^22 < 2^53).
-	const double[23] cExactPowersOf10 = .(1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
-		1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22);
-
-	/// One-pass parse of a decimal without underscores, `[sign]digits[.digits][(e|E)[sign]digits]`
-	/// with a fraction or exponent, whose digits fit an exact double mantissa (at most 2^53, 19 digits)
-	/// and whose decimal exponent is within ±22. Then mantissa and power of ten are both exact, and one
-	/// IEEE multiply or divide rounds correctly (Clinger's fast path), bit-identical to Double.Parse.
-	/// Anything else returns false and takes the full path. (TomlBeef's TryParsePlainFloat, with KDL's
-	/// leading zeros allowed.)
-	static bool TryParsePlainFloat(StringView token, out double value)
-	{
-		value = 0;
+		value = default;
 		char8* ptr = token.Ptr;
 		int length = token.Length;
 		int pos = (ptr[0] == '-' || ptr[0] == '+') ? 1 : 0;
@@ -280,10 +255,18 @@ extension KdlReaderCore<TCursor>
 		int intDigits = pos - intStart;
 		if (intDigits == 0)
 			return false;
+		if (pos == length)
+		{
+			// An integer
+			if (intDigits > 18)
+				return false;
+			value = .Integer((ptr[0] == '-') ? -(int64)mantissa : (int64)mantissa, token);
+			return true;
+		}
 
 		int exponent = 0;
 		bool isFloat = false;
-		if (pos < length && ptr[pos] == '.')
+		if (ptr[pos] == '.')
 		{
 			pos++;
 			int fracStart = pos;
@@ -309,8 +292,8 @@ extension KdlReaderCore<TCursor>
 			exponent += negativeExponent ? -expValue : expValue;
 			isFloat = true;
 		}
-		// A leftover character (an underscore, a 20th digit, a 5-digit exponent, anything invalid) or a
-		// plain integer goes to the full path
+		// A leftover character (an underscore, a 20th digit, a 5-digit exponent, anything invalid) goes to
+		// the full path
 		if (pos != length || !isFloat || mantissa > (1UL << 53) || exponent < -22 || exponent > 22)
 			return false;
 
@@ -319,9 +302,13 @@ extension KdlReaderCore<TCursor>
 			result /= cExactPowersOf10[-exponent];
 		else
 			result *= cExactPowersOf10[exponent];
-		value = (ptr[0] == '-') ? -result : result;
+		value = .Float((ptr[0] == '-') ? -result : result, token);
 		return true;
 	}
+
+	/// Powers of ten that a double holds exactly (5^22 < 2^53).
+	const double[23] cExactPowersOf10 = .(1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
+		1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22);
 
 	/// Skips `(digit | '_')*`. @return The offset after them.
 	[Inline]

@@ -69,6 +69,7 @@ internal class KdlDocumentStore
 	/// @param keepIntegerText Whether an integer keeps its written form (PreserveStyle); otherwise it
 	/// is dropped, and the value is written in decimal.
 	/// @return The owned value.
+	[Inline]
 	public KdlValue OwnValue(KdlValue value, bool keepIntegerText)
 	{
 		switch (value)

@@ -170,9 +170,12 @@ reading them; this change alone took the event pass from about 225 to 330 MB/s.
 line-space LF and CR) inline and return unless the next byte could continue whitespace (`/`, `\`, a
 non-ASCII lead byte); quoted-string bodies are scanned 8 bytes at a time
 (`KdlChar.ScanQuotedText`: stops at `"`, `\`, controls up to CR, 0xC2 and 0xE2); numbers try
-TomlBeef's `TryParsePlainInteger` and `TryParsePlainFloat` (Clinger's exact fast path,
-bit-identical to `Double.Parse`, checked by a test) before the full parse, whose float fallback strips
-underscores on the stack.
+`TryParsePlainNumber` (TomlBeef's `TryParsePlainInteger` and `TryParsePlainFloat` in one pass over
+the integer part: Clinger's exact fast path for floats, bit-identical to `Double.Parse`, checked by a
+test) before the full parse, whose float fallback strips underscores on the stack. Identifier
+scanning is one table lookup per byte (`KdlChar.IdentifierByteClass`: stop, ASCII identifier
+character, or a code point to decode). Property lookup scans the node's entries from the end:
+28–64 ns for 4–16 properties (`KdlTester -bench-lookup`), so the planned hash index is not built.
 
 ### Values
 
@@ -236,7 +239,8 @@ mEntryCount`. The reader reports a node's entries before its children, so a pars
 entries contiguously, in order. `mEntryCapacity` is the room reserved at the start: adding an entry
 past it (mutation, phase 5) moves the node's range to the end of the list, leaving the old range as a
 hole until the next `Clear`. Property lookup scans the node's entries from the end, so the last
-duplicate wins; the hash index for nodes with many properties (`plan.md` §4.3) is not built yet.
+duplicate wins; the hash index for nodes with many properties (`plan.md` §4.3) was measured unneeded
+and is not built (§3).
 
 ### Text
 
