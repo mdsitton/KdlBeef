@@ -345,7 +345,8 @@ round-trips byte for byte; edits keep neighboring formatting.
 `bench/compare/typed.sh` (`typed-results.md`).*
 Port the TomlBeef generator with KDL roles; typed benchmark against kdl-rs serde, gokdl2 and KdlSharp.
 
-**Phase 7 — Extras as needed.** Streaming `KdlWriter`, KQL, v1 input, JSON-in-KDL.
+**Phase 7 — Extras as needed.** KQL, JSON-in-KDL. (Dropped 2026-09-30: v1 input, and the streaming
+`KdlWriter`, which TomlBeef has no equivalent of.)
 
 ## 7. Testing
 
@@ -372,7 +373,7 @@ Node 26, .NET 10, Python 3.14, GCC 16 + CMake, Zig 0.16 (downloaded by `fetch.sh
 
 ## 9. Open questions for the author
 
-1. **KDL v1 input**: needed at all? (Plan: no until asked; then an explicit converting front end.)
+1. ~~**KDL v1 input**~~ — decided (2026-09-30): not supported for now.
 2. ~~**Parent pointers** on nodes~~ — decided: node IDs with parent/sibling link arrays and a
    `KdlNode` handle with properties (§4.3).
 3. ~~**Collect-errors as the default**~~ — decided (2026-09-29): an opt-in `KdlReadConfig` flag; the

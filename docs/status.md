@@ -74,5 +74,5 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 ## Suggested order
 
 Everything in the plan's must-have scope is done. What is left is refinement (P3, P5, P6 rows) and
-phase 7 extras (`plan.md` §6: streaming `KdlWriter`, KQL, KDL v1 input, JSON-in-KDL), to pick up
+phase 7 extras (`plan.md` §6: KQL, JSON-in-KDL; v1 input and a streaming writer are out), to pick up
 when the UI framework needs them.
