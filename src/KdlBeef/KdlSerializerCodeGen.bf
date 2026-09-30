@@ -81,14 +81,217 @@ public static class KdlSerializerCodeGen
 			write.Append("\tTry!(base.KdlWrite(_node));\n");
 		}
 
-		// Over the whole [KdlObject] chain (a base's fields are read by its own KdlRead, called first, but
-		// they share the node): the first argument no [KdlArgument] field takes, for [KdlArguments]; and
-		// the child names the fields claim, which a [KdlChildren] list anywhere in the chain leaves alone
-		// The same pass rejects mappings that would read the same KDL twice: argument indices, a second
-		// [KdlArguments] or [KdlChildren], and two fields with one property key or child name.
-		int nextArgument = 0;
+		// 1. The chain's shared places (argument positions, claimed child names), checked for conflicts
 		let claimed = scope String();
-		int claimedCount = 0;
+		ScanChain(type, naming, ownerName, let nextArgument, claimed, let claimedCount);
+		// The claimed names, as the [KdlChildren] code sees them: for a class through a virtual property,
+		// so that a base's list also leaves alone the children a subclass's fields claim
+		if (claimedCount > 0)
+			read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
+		StringView claimedExpr;
+		if (type.IsValueType)
+			claimedExpr = (claimedCount > 0) ? "sKdlClaimed" : "default";
+		else
+		{
+			claimedExpr = "this.KdlClaimedChildNames";
+			read.Insert(0, scope $"protected {baseIsObject ? "override" : "virtual"} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
+		}
+
+		// 2. Every field's plan (its kinds and role), checked before any code is written
+		let plans = scope List<FieldPlan>();
+		defer { ClearAndDeleteItems!(plans); }
+		for (let field in type.GetFields())
+		{
+			if (IsSerialized(type, field))
+				plans.Add(PlanField(field, naming, ownerName, nextArgument));
+		}
+
+		// 3. The code, from the plans
+		for (let plan in plans)
+		{
+			StringView fieldName = plan.mField.Name;
+			switch (plan.mRole)
+			{
+			case .Property, .Argument, .ChildValue:
+				EmitReadScalar(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mRole, plan.mIndex, plan.mType, plan.mKind, plan.mConverter, naming);
+				EmitWriteScalar(write, fieldName, plan.mKey, plan.mAliases, plan.mRole, plan.mIndex, plan.mType, plan.mKind, plan.mConverter, naming);
+			case .Arguments, .ChildArguments:
+				EmitReadScalarList(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mRole, plan.mIndex, plan.mType, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
+				EmitWriteScalarList(write, fieldName, plan.mKey, plan.mAliases, plan.mRole, plan.mIndex, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
+			case .ChildObject:
+				EmitReadObject(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mType);
+				EmitWriteObject(write, fieldName, plan.mKey, plan.mAliases, plan.mType);
+			case .ChildObjects:
+				let rawName = NodeName(plan.mElement, .. scope .());
+				let elementName = AppendLiteral(.. scope .(), rawName);
+				EmitReadObjects(read, fieldName, rawName, elementName, plan.mRequired, plan.mType, plan.mElement);
+				EmitWriteObjects(write, fieldName, elementName, plan.mElement);
+			case .Children:
+				EmitReadChildren(read, ownerName, fieldName, plan.mType, plan.mElement, claimedExpr);
+				EmitWriteChildren(write, fieldName, plan.mElement, claimedExpr);
+			case .ChildDictionary:
+				let elementName = (plan.mValueKind == .List && plan.mElementKind == .Object) ? AppendLiteral(.. scope .(), NodeName(plan.mElement, .. scope .())) : "";
+				EmitReadDictionary(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mType, plan.mValueType, plan.mValueKind, plan.mValueConverter,
+					plan.mElement, plan.mElementKind, plan.mElementConverter, elementName, naming);
+				EmitWriteDictionary(write, fieldName, plan.mKey, plan.mAliases, plan.mValueType, plan.mValueKind, plan.mValueConverter,
+					plan.mElement, plan.mElementKind, plan.mElementConverter, elementName, naming);
+			}
+		}
+
+		read.Append("\treturn .Ok;\n}\n");
+		write.Append("\treturn .Ok;\n}\n");
+
+		Compiler.EmitAddInterface(type, typeof(IKdlSerializable));
+		Compiler.EmitTypeBody(type, read);
+		Compiler.EmitTypeBody(type, write);
+	}
+
+	/// How one field maps: what Emit writes code from. For a dictionary, mValue* describe its values; for
+	/// a List field, or a dictionary of Lists, mElement* the items.
+	class FieldPlan
+	{
+		public FieldInfo mField;
+		/// The KDL name and its aliases, as Beef string literals.
+		public String mKey = new .() ~ delete _;
+		public List<String> mAliases = new .() ~ DeleteContainerAndItems!(_);
+		public bool mRequired;
+		public Role mRole;
+		/// The argument index ([KdlArgument]), or the first one ([KdlArguments]).
+		public int mIndex;
+		public Type mType;
+		public Kind mKind;
+		public Type mConverter;
+		public Type mValueType;
+		public Kind mValueKind;
+		public Type mValueConverter;
+		public Type mElement;
+		public Kind mElementKind;
+		public Type mElementConverter;
+
+		public this()
+		{
+		}
+	}
+
+	/// Classifies a field of the type being generated and picks its role, stopping the build (naming the
+	/// field) for a type or role attribute that cannot work.
+	[Comptime]
+	static FieldPlan PlanField(FieldInfo field, KdlNaming naming, StringView ownerName, int nextArgument)
+	{
+		let plan = new FieldPlan();
+		plan.mField = field;
+		if (field.GetCustomAttribute<KdlNameAttribute>() case .Ok(let named))
+			AppendLiteral(plan.mKey, named.mName);
+		else
+			AppendLiteral(plan.mKey, ApplyNaming(field.Name, naming, .. scope .()));
+		for (let alias in field.GetCustomAttributes<KdlAliasAttribute>())
+			plan.mAliases.Add(AppendLiteral(.. new .(), alias.mName));
+		plan.mRequired = field.HasCustomAttribute<KdlRequiredAttribute>();
+
+		let fieldType = field.FieldType;
+		plan.mType = fieldType;
+		Type converter = null;
+		Kind kind;
+		if (field.GetCustomAttribute<KdlUseConverterAttribute>() case .Ok(let use))
+		{
+			converter = use.mConverter;
+			kind = (DictionaryValue(fieldType) != null) ? .Dictionary : (ListElement(fieldType) != null) ? .List : .Converter;
+		}
+		else
+			kind = Classify(fieldType, out converter);
+		plan.mKind = kind;
+		plan.mConverter = converter;
+		// A dictionary's values take the place of the field below: their type, and for a List value its
+		// items (a [KdlUseConverter] converter applies to the values, or to a List value's items)
+		Type valueType = null;
+		var valueKind = Kind.Unsupported;
+		Type valueConverter = converter;
+		if (kind == .Dictionary)
+		{
+			valueType = DictionaryValue(fieldType);
+			if (converter != null)
+				valueKind = (ListElement(valueType) != null) ? .List : .Converter;
+			else
+				valueKind = Classify(valueType, out valueConverter);
+		}
+		plan.mValueType = valueType;
+		plan.mValueKind = valueKind;
+		plan.mValueConverter = valueConverter;
+		let listType = (kind == .Dictionary) ? valueType : fieldType;
+		Type element = null;
+		var elementKind = Kind.Unsupported;
+		Type elementConverter = (kind == .Dictionary) ? valueConverter : converter;
+		if (kind == .List || valueKind == .List)
+		{
+			element = ListElement(listType);
+			if (converter != null)
+				elementKind = .Converter;
+			else
+				elementKind = Classify(element, out elementConverter);
+		}
+		plan.mElement = element;
+		plan.mElementKind = elementKind;
+		plan.mElementConverter = elementConverter;
+
+		bool scalar = kind != .Object && kind != .List && kind != .Dictionary && kind != .Unsupported;
+		bool scalarList = kind == .List && IsScalar(elementKind);
+		if (field.HasCustomAttribute<KdlChildrenAttribute>())
+		{
+			if (kind != .List)
+				Fail(ownerName, field.Name, "[KdlChildren] needs a List<T> field");
+			plan.mRole = .Children;
+		}
+		else if (field.HasCustomAttribute<KdlArgumentsAttribute>())
+		{
+			if (!scalarList)
+				Fail(ownerName, field.Name, "[KdlArguments] needs a List of scalars (bool, integers, floats, String, enums, converter types)");
+			plan.mRole = .Arguments;
+			plan.mIndex = nextArgument;
+		}
+		else if (field.GetCustomAttribute<KdlArgumentAttribute>() case .Ok(let argument))
+		{
+			if (!scalar)
+				Fail(ownerName, field.Name, "[KdlArgument] needs a scalar field (bool, integers, floats, String, enums, converter types)");
+			plan.mRole = .Argument;
+			plan.mIndex = argument.mIndex;
+		}
+		else if (field.HasCustomAttribute<KdlChildAttribute>())
+		{
+			if (!scalar)
+				Fail(ownerName, field.Name, "[KdlChild] needs a scalar field; [KdlObject] and List fields are child nodes already");
+			plan.mRole = .ChildValue;
+		}
+		else if (scalar)
+			plan.mRole = .Property;
+		else if (kind == .Object)
+			plan.mRole = .ChildObject;
+		else if (scalarList)
+			plan.mRole = .ChildArguments;
+		else if (kind == .List && elementKind == .Object)
+			plan.mRole = .ChildObjects;
+		else if (kind == .Dictionary && (IsScalar(valueKind) || valueKind == .Object || (valueKind == .List && (IsScalar(elementKind) || elementKind == .Object))))
+			plan.mRole = .ChildDictionary;
+		else
+		{
+			let typeName = fieldType.GetFullName(.. scope .());
+			Fail(ownerName, field.Name, scope $"KDL serialization does not support fields of type {typeName}. Supported: bool, integers, float, double, String, enums, [KdlObject] types, List<T> of those, Dictionary<String, T> of those (not of dictionaries or lists of lists), and types with a converter ([KdlConverter] registration or [KdlUseConverter] on the field). Mark the field [KdlIgnore] to leave it out.");
+			plan.mRole = .Property;
+		}
+		return plan;
+	}
+
+	/// Over the whole [KdlObject] chain from `type` (a base's fields are read by its own KdlRead, called
+	/// first, but they share the node): the first argument no [KdlArgument] field takes, for
+	/// [KdlArguments]; and the child names the fields claim (Beef literals, comma-separated, in
+	/// `claimed`), which a [KdlChildren] list anywhere in the chain leaves alone. Stops the build for
+	/// mappings that would read the same KDL twice: a negative or repeated argument index, a second
+	/// [KdlArguments] or [KdlChildren], several role attributes on a field, and two properties or two
+	/// child nodes with one name.
+	[Comptime]
+	static void ScanChain(Type type, KdlNaming naming, StringView ownerName, out int nextArgument, String claimed, out int claimedCount)
+	{
+		nextArgument = 0;
+		claimedCount = 0;
 		int childrenLists = 0;
 		String argumentsField = null;
 		// The field that maps each argument index, property key and child name ("Type.Field")
@@ -166,150 +369,6 @@ public static class KdlSerializerCodeGen
 				}
 			}
 		}
-		// The claimed names, as the [KdlChildren] code sees them: for a class through a virtual property,
-		// so that a base's list also leaves alone the children a subclass's fields claim
-		if (claimedCount > 0)
-			read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
-		StringView claimedExpr;
-		if (type.IsValueType)
-			claimedExpr = (claimedCount > 0) ? "sKdlClaimed" : "default";
-		else
-		{
-			claimedExpr = "this.KdlClaimedChildNames";
-			read.Insert(0, scope $"protected {baseIsObject ? "override" : "virtual"} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
-		}
-
-		for (let field in type.GetFields())
-		{
-			if (!IsSerialized(type, field))
-				continue;
-
-			let key = scope String();
-			if (field.GetCustomAttribute<KdlNameAttribute>() case .Ok(let named))
-				AppendLiteral(key, named.mName);
-			else
-				AppendLiteral(key, ApplyNaming(field.Name, naming, .. scope .()));
-			let aliases = scope List<String>();
-			defer { ClearAndDeleteItems!(aliases); }
-			for (let alias in field.GetCustomAttributes<KdlAliasAttribute>())
-				aliases.Add(AppendLiteral(.. new .(), alias.mName));
-			bool required = field.HasCustomAttribute<KdlRequiredAttribute>();
-
-			let fieldType = field.FieldType;
-			Type converter = null;
-			Kind kind;
-			if (field.GetCustomAttribute<KdlUseConverterAttribute>() case .Ok(let use))
-			{
-				converter = use.mConverter;
-				kind = (DictionaryValue(fieldType) != null) ? .Dictionary : (ListElement(fieldType) != null) ? .List : .Converter;
-			}
-			else
-				kind = Classify(fieldType, out converter);
-			// A dictionary's values take the place of the field below: their type, and for a List value its
-			// items (a [KdlUseConverter] converter applies to the values, or to a List value's items)
-			Type valueType = null;
-			var valueKind = Kind.Unsupported;
-			Type valueConverter = converter;
-			if (kind == .Dictionary)
-			{
-				valueType = DictionaryValue(fieldType);
-				if (converter != null)
-					valueKind = (ListElement(valueType) != null) ? .List : .Converter;
-				else
-					valueKind = Classify(valueType, out valueConverter);
-			}
-			let listType = (kind == .Dictionary) ? valueType : fieldType;
-			Type element = null;
-			var elementKind = Kind.Unsupported;
-			Type elementConverter = (kind == .Dictionary) ? valueConverter : converter;
-			if (kind == .List || valueKind == .List)
-			{
-				element = ListElement(listType);
-				if (converter != null)
-					elementKind = .Converter;
-				else
-					elementKind = Classify(element, out elementConverter);
-			}
-
-			Role role;
-			int index = 0;
-			bool scalar = kind != .Object && kind != .List && kind != .Dictionary && kind != .Unsupported;
-			bool scalarList = kind == .List && IsScalar(elementKind);
-			if (field.HasCustomAttribute<KdlChildrenAttribute>())
-			{
-				if (kind != .List)
-					Fail(ownerName, field.Name, "[KdlChildren] needs a List<T> field");
-				role = .Children;
-			}
-			else if (field.HasCustomAttribute<KdlArgumentsAttribute>())
-			{
-				if (!scalarList)
-					Fail(ownerName, field.Name, "[KdlArguments] needs a List of scalars (bool, integers, floats, String, enums, converter types)");
-				role = .Arguments;
-				index = nextArgument;
-			}
-			else if (field.GetCustomAttribute<KdlArgumentAttribute>() case .Ok(let argument))
-			{
-				if (!scalar)
-					Fail(ownerName, field.Name, "[KdlArgument] needs a scalar field (bool, integers, floats, String, enums, converter types)");
-				role = .Argument;
-				index = argument.mIndex;
-			}
-			else if (field.HasCustomAttribute<KdlChildAttribute>())
-			{
-				if (!scalar)
-					Fail(ownerName, field.Name, "[KdlChild] needs a scalar field; [KdlObject] and List fields are child nodes already");
-				role = .ChildValue;
-			}
-			else if (scalar)
-				role = .Property;
-			else if (kind == .Object)
-				role = .ChildObject;
-			else if (scalarList)
-				role = .ChildArguments;
-			else if (kind == .List && elementKind == .Object)
-				role = .ChildObjects;
-			else if (kind == .Dictionary && (IsScalar(valueKind) || valueKind == .Object || (valueKind == .List && (IsScalar(elementKind) || elementKind == .Object))))
-				role = .ChildDictionary;
-			else
-			{
-				let typeName = fieldType.GetFullName(.. scope .());
-				Fail(ownerName, field.Name, scope $"KDL serialization does not support fields of type {typeName}. Supported: bool, integers, float, double, String, enums, [KdlObject] types, List<T> of those, Dictionary<String, T> of those (not of dictionaries or lists of lists), and types with a converter ([KdlConverter] registration or [KdlUseConverter] on the field). Mark the field [KdlIgnore] to leave it out.");
-				role = .Property;
-			}
-
-			switch (role)
-			{
-			case .Property, .Argument, .ChildValue:
-				EmitReadScalar(read, field.Name, key, aliases, required, role, index, fieldType, kind, converter, naming);
-				EmitWriteScalar(write, field.Name, key, aliases, role, index, fieldType, kind, converter, naming);
-			case .Arguments, .ChildArguments:
-				EmitReadScalarList(read, field.Name, key, aliases, required, role, index, fieldType, element, elementKind, elementConverter, naming);
-				EmitWriteScalarList(write, field.Name, key, aliases, role, index, element, elementKind, elementConverter, naming);
-			case .ChildObject:
-				EmitReadObject(read, field.Name, key, aliases, required, fieldType);
-				EmitWriteObject(write, field.Name, key, aliases, fieldType);
-			case .ChildObjects:
-				let rawName = NodeName(element, .. scope .());
-				let elementName = AppendLiteral(.. scope .(), rawName);
-				EmitReadObjects(read, field.Name, rawName, elementName, required, fieldType, element);
-				EmitWriteObjects(write, field.Name, elementName, element);
-			case .Children:
-				EmitReadChildren(read, ownerName, field.Name, fieldType, element, claimedExpr);
-				EmitWriteChildren(write, field.Name, element, claimedExpr);
-			case .ChildDictionary:
-				let elementName = (valueKind == .List && elementKind == .Object) ? AppendLiteral(.. scope .(), NodeName(element, .. scope .())) : "";
-				EmitReadDictionary(read, field.Name, key, aliases, required, fieldType, valueType, valueKind, valueConverter, element, elementKind, elementConverter, elementName, naming);
-				EmitWriteDictionary(write, field.Name, key, aliases, valueType, valueKind, valueConverter, element, elementKind, elementConverter, elementName, naming);
-			}
-		}
-
-		read.Append("\treturn .Ok;\n}\n");
-		write.Append("\treturn .Ok;\n}\n");
-
-		Compiler.EmitAddInterface(type, typeof(IKdlSerializable));
-		Compiler.EmitTypeBody(type, read);
-		Compiler.EmitTypeBody(type, write);
 	}
 
 	[Comptime]

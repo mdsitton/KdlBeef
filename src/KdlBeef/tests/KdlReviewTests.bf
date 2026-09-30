@@ -653,6 +653,59 @@ static class KdlReviewTests
 		Test.Assert(dup.Root.Find("env").ChildCount == 2 && dup.Root.Find("env").LastChild.GetString(0) == "4", dup.Write(.. scope .()));
 	}
 
+	// Budgets: MaxStringBytes during decoding, MaxInputBytes before a file is read
+
+	[Test]
+	public static void Budgets_StringLimitWhileDecoding()
+	{
+		var config = KdlReadConfig();
+		config.MaxStringBytes = 8;
+		let doc = scope KdlDocument();
+		// Escaped quoted strings, multi-line strings with and without escapes: located at the string
+		for (let text in StringView[]("n \"abc\\tdefghijkl\"", "n \"\"\"\n    abcdefghij\n    \"\"\"", "n \"\"\"\n    abc\\tdefghij\n    \"\"\"", "n #\"\"\"\n    abcdefghij\n    \"\"\"#"))
+		{
+			switch (doc.Read(text, config))
+			{
+			case .Ok:
+				Test.Assert(false, scope $"`{text}` should exceed the limit");
+			case .Err(let error):
+				Test.Assert(error.mKind == .ResourceLimitExceeded && error.mLine == 1 && error.mColumn == 3, scope $"`{text}`: {error}");
+			}
+		}
+		// A long source that decodes to a short value is within it
+		Test.Assert(doc.Read("n \"\\u{41}\\u{42}\\u{43}\\u{44}\\u{45}\\u{46}\\u{47}\\u{48}\" \"\"\"\n        abcdefgh\n        \"\"\"", config) case .Ok);
+		Test.Assert(doc.Root.Find("n").GetString(0) == "ABCDEFGH" && doc.Root.Find("n").GetString(1) == "abcdefgh");
+	}
+
+	[Test]
+	public static void Budgets_FileSizeBeforeReading()
+	{
+		let path = scope String();
+		Test.Assert(System.IO.Path.GetTempPath(path) case .Ok);
+		path.Append("kdlbeef-budget-test.kdl");
+		let text = scope String();
+		for (int i < 200)
+			text.AppendF("node{} \"value\"\n", i);
+		Test.Assert(System.IO.File.WriteAllText(path, text) case .Ok);
+		defer { System.IO.File.Delete(path).IgnoreError(); }
+
+		let doc = scope KdlDocument();
+		var config = KdlReadConfig();
+		config.MaxInputBytes = 100;
+		switch (doc.ReadFile(path, config))
+		{
+		case .Ok:
+			Test.Assert(false, "the file is larger than MaxInputBytes");
+		case .Err(let error):
+			Test.Assert(error.mKind == .ResourceLimitExceeded && error.mMessage.Contains(scope $"({text.Length} bytes)") && error.mSource == path, error.ToString(.. scope .()));
+		}
+		Test.Assert(doc.Nodes.IsEmpty);
+		// Within the budget, and without one: the whole file
+		config.MaxInputBytes = text.Length;
+		Test.Assert(doc.ReadFile(path, config) case .Ok && doc.Nodes.Count == 200);
+		Test.Assert(doc.ReadFile(path) case .Ok && doc.Nodes.Last.Name == "node199");
+	}
+
 	// Decimal big integers are normalized directly
 
 	[Test]

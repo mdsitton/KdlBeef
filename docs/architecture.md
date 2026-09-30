@@ -313,6 +313,13 @@ per entry, `MaxStringBytes` on every decoded string (names, keys, annotations, v
 content counts: it is parsed like the rest. Errors carry the source name (`source:line:column:
 message`); `ReadFile` uses the path unless one is set.
 
+The byte limits are allocation budgets, not only checks of the result. A string that needs decoding
+(escapes, a multi-line string's dedent) is checked as its value grows and fails as soon as it passes
+`MaxStringBytes`; one without escapes is a view and allocates nothing; the intermediate copies of a
+multi-line string are bounded by its source (a decoded string is never longer), which is in memory
+already or, from a stream, bounded by `MaxTokenBytes`. `ReadFile` without streaming checks the file's
+size against `MaxInputBytes` before reading anything, and stops at the limit if the file grows.
+
 The reader reports each event's range: `Offset` and `EndOffset` (a node's range, at `EndNode`,
 runs from its `/-` or annotation to its last token, tracked as `mLastTokenEnd`). With
 `KdlMetadataMode.Positions`, the builder turns them into line and column through the reader's cursor
@@ -358,7 +365,10 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   reaches fields through `this.` and uses `_`-prefixed locals; enums are generated switches over their
   (named) cases, so nothing needs reflection at run time. A `[KdlObject]` base's methods are hidden
   (`new`) and called first. Unsupported field types, and roles on the wrong kind of field, stop the
-  build naming the field.
+  build naming the field. `Emit` works in three steps: `ScanChain` (the chain's shared places and
+  conflicts), a `FieldPlan` per field from `PlanField` (kinds, dictionary value and list item types,
+  role, argument index; every check), then the code from the plans, so nothing is emitted for a type
+  whose mapping fails.
 - **Roles.** Scalars (bool, integers, floats, String, enums, converter types) are properties;
   `[KdlArgument(n)]` an argument; `[KdlChild]` a `name value` child; `[KdlArguments] List` the
   arguments from the first free one. `[KdlObject]` fields are child nodes named after the field;

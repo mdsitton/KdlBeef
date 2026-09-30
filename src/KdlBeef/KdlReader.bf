@@ -189,6 +189,21 @@ public class KdlReader
 /// `mData[offset]` for `mBase <= offset < mEnd`, offsets absolute, so the offsets it keeps survive the
 /// window moving. Anything that may read at the window's end asks for more first (`Avail`, `PeekAt`,
 /// `NewlineAt`, …); for in-memory text the window is the whole input and those checks compile away.
+///
+/// Invariants (see architecture.md §3 and the review's regression tests):
+/// - **Event balance.** Every reported StartNode gets exactly one EndNode before EndOfDocument, also
+///   with CollectErrors (recovery sets mEndAfterRecovery or mClosingAtEnd). Events are reported only
+///   while mSuppressed is 0; it counts the slashdashed nodes and children blocks around the position
+///   (a frame's own, released when the frame closes, even at the end during recovery) plus a
+///   slashdashed entry while it is read.
+/// - **Retention.** The window keeps every byte from min(mRetain, mPos) on: mRetain is the start of the
+///   construct being read (a node head or entry), or between constructs RetainIdle (nothing, or with
+///   PreserveStyle the next event's slice start). Loops that keep a local position store it into
+///   mPos before asking for more at the window's end, so a refill can drop what they passed.
+/// - **Views.** mName, mAnnotation, mValue and mEntryValue view the window or a reader buffer: valid
+///   until the next event (Grow rebases them when the window moves). mError views the per-thread
+///   error buffers: nothing may make another KdlParseError between recording it and Next returning it
+///   (recovery asks the cursor HasInputError, never TryGetInputError).
 internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 {
 	enum State : uint8
@@ -203,12 +218,21 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		Failed
 	}
 
+	/// Where a node is in its grammar: `node := name entries* (slashdashed-block)* block? (slashdashed-block)*`.
+	enum Phase : uint8
+	{
+		/// Arguments and properties may follow (and children blocks).
+		Entries,
+		/// After a slashdashed children block: only children blocks may follow.
+		AfterSlashdashedBlock,
+		/// After the (real) children block: only slashdashed blocks may follow.
+		AfterBlock
+	}
+
 	/// An open node.
 	struct Frame
 	{
-		/// 0: arguments and properties may follow; 1: after a slashdashed children block (only children
-		/// blocks may follow); 2: after the children block (only slashdashed ones may follow).
-		public uint8 mPhase;
+		public Phase mPhase;
 		/// The node is slashdashed.
 		public bool mSlashdashed;
 		/// Its open children block is slashdashed.
@@ -591,12 +615,12 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 					{
 						frame.mChildrenSlashdashed = false;
 						mSuppressed--;
-						if (frame.mPhase == 0)
-							frame.mPhase = 1;
+						if (frame.mPhase == .Entries)
+							frame.mPhase = .AfterSlashdashedBlock;
 					}
 					else
 					{
-						frame.mPhase = 2;
+						frame.mPhase = .AfterBlock;
 						frame.mBlockCloseEnd = (int32)mPos;
 					}
 					mState = .Entries;
@@ -690,7 +714,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 						mState = .Nodes;
 						continue;
 					}
-					if (current.mPhase != 0)
+					if (current.mPhase != .Entries)
 						return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
 					if (mData[mPos] == '=')
 						return .Err(Fail(.InvalidSlashdash, "A slashdash `/-` cannot come between a property's key and `=`; put it before the key", mPos));
@@ -705,7 +729,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 				}
 				if (c == '{')
 				{
-					if (current.mPhase == 2)
+					if (current.mPhase == .AfterBlock)
 						return .Err(Fail(.InvalidChildren, "A node can have only one children block; slashdash (`/-`) the others", mPos));
 					NoteBrace(ref current);
 					mPos++;
@@ -720,9 +744,9 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 						return .Err(Fail(.UnexpectedChar, scope $"`{c}` cannot appear in an identifier string: quote the string", mPos));
 					return .Err(Unexpected("an argument, property, children block or the end of the node"));
 				}
-				if (current.mPhase == 2)
+				if (current.mPhase == .AfterBlock)
 					return .Err(Fail(.InvalidChildren, "Expected the end of the node (a newline or `;`) after its children block", mPos));
-				if (current.mPhase != 0)
+				if (current.mPhase != .Entries)
 					return .Err(Fail(.InvalidChildren, "Arguments and properties must come before the node's children blocks", mPos));
 				if (!space)
 					return .Err(MissingSpace());

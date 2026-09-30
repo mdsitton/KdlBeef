@@ -429,5 +429,18 @@ Follow-ups done after that:
   the document's generation and their node: `IsValid` tells, and using a stale one is a fatal error,
   as for a handle (test in `Handles_InvalidAfterReadOrClear`).
 
-Not done, recorded in `status.md`: strict allocation budgets for `MaxStringBytes` and non-streaming
-`ReadFile`; the reader-invariant and serializer-descriptor refactors; the API additions.
+- **Budgets.** `MaxStringBytes` is checked as a string's value is decoded (quoted escapes,
+  multi-line dedent), failing at the string's start as soon as it passes the limit; non-streaming
+  `ReadFile` checks the file's size against `MaxInputBytes` before reading and stops at the limit if
+  the file grows (tests `Budgets_*`).
+- **Reader readability.** `Frame.mPhase` is a named `Phase` enum, and `KdlReaderCore` states its
+  invariants (event balance and suppression, retention, view and error-buffer lifetimes).
+- **Serializer descriptor.** `Emit` is three steps: `ScanChain`, a `FieldPlan` per field from
+  `PlanField` (all validation), then emission from the plans. The generated code is unchanged (the
+  typed benchmark's checksums and the tests agree).
+
+Throughput after all of these: document read 254 MB/s on `ui` and 230 on `html-standard`, event pass
+313-319 and 307, typed read 38.9 ms and write 23.2 ms, the same as before within noise.
+
+Not done, recorded in `status.md`: splitting `ReadNext` along its responsibilities (its invariants
+are stated, the code is not restructured); the API additions.

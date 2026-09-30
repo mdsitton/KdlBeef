@@ -17,6 +17,20 @@ extension KdlReaderCore<TCursor>
 		return value;
 	}
 
+	/// Decoding into `buffer` went past MaxStringBytes: checked as the text grows, so a long string fails
+	/// before its whole value is built (a decoded string is never longer than its source, so the copies
+	/// are bounded by the input, and a stream's by MaxTokenBytes)
+	[Inline]
+	bool PastStringLimit(String buffer)
+	{
+		return mConfig.MaxStringBytes > 0 && buffer.Length > mConfig.MaxStringBytes;
+	}
+
+	KdlFailure StringLimitError(int start)
+	{
+		return Fail(.ResourceLimitExceeded, scope $"A string of more than {mConfig.MaxStringBytes} bytes exceeds MaxStringBytes ({mConfig.MaxStringBytes})", start, Math.Max(mPos - start, 1));
+	}
+
 	Result<KdlValue, KdlFailure> ReadValueToken(String buffer)
 	{
 		if (!Avail(mPos))
@@ -363,6 +377,8 @@ extension KdlReaderCore<TCursor>
 		buffer.Append(mData + bodyStart, mPos - bodyStart);
 		while (true)
 		{
+			if (PastStringLimit(buffer))
+				return .Err(StringLimitError(start));
 			int runStart = mPos;
 			mPos = ScanQuoted(mPos);
 			buffer.Append(mData + runStart, mPos - runStart);
@@ -372,6 +388,8 @@ extension KdlReaderCore<TCursor>
 			if (b == '"')
 			{
 				mPos++;
+				if (PastStringLimit(buffer))
+					return .Err(StringLimitError(start));
 				return .Ok(buffer);
 			}
 			if (b == '\\')
@@ -566,6 +584,9 @@ extension KdlReaderCore<TCursor>
 					return .Err(Fail(.InvalidMultiLineString, "Every line of a multi-line string must start with the same whitespace as its closing line", bodyOffset >= 0 ? bodyOffset + lineStart : start));
 				joined.Append(line.Substring(prefix.Length));
 			}
+			// Without escapes the joined lines are the value
+			if (!escapes && PastStringLimit(joined))
+				return .Err(StringLimitError(start));
 			lineStart = lineEnd + n;
 		}
 
@@ -586,6 +607,8 @@ extension KdlReaderCore<TCursor>
 				while (i < end && p[i] != '\\')
 					i++;
 				buffer.Append((char8*)p + runStart, i - runStart);
+				if (PastStringLimit(buffer))
+					return .Err(StringLimitError(start));
 			}
 		}
 		return .Ok;
