@@ -188,6 +188,8 @@ class Program
 		case "write":
 			let output = scope String();
 			PrintResult(Measure(minSamples, scope () => { output.Clear(); doc.Write(output); }), output.Length);
+		case "typed":
+			return BenchTyped(input, doc, minSamples);
 		case "preserve":
 			// A PreserveStyle read, then writing it back
 			var config = KdlReadConfig();
@@ -199,6 +201,55 @@ class Program
 			Console.Error.WriteLine($"unknown bench mode {mode}");
 			return 2;
 		}
+		return 0;
+	}
+
+	/// ui.kdl into the [KdlObject] types of TypedUi.bf: reading (parse and bind, and binding alone from
+	/// a parsed document) and writing (a new document from the objects, then its text).
+	static int BenchTyped(StringView input, KdlDocument doc, int minSamples)
+	{
+		let ui = scope UiDocument();
+		if (ui.KdlRead(doc.Root) case .Err(let error))
+		{
+			Console.Error.WriteLine($"bind error: {error}");
+			return 1;
+		}
+		ui.Tally(let count, let sum);
+		Console.WriteLine($"check: {count} {sum}");
+
+		// The check again after writing and re-reading, so the writer is checked too
+		let written = scope String();
+		let fresh = scope KdlDocument();
+		ui.KdlWrite(fresh.Root).IgnoreError();
+		fresh.Write(written);
+		let again = scope UiDocument();
+		KdlSerializer.Read(written, again).IgnoreError();
+		again.Tally(let count2, let sum2);
+		Console.WriteLine($"re-read check: {count2} {sum2}");
+
+		Console.Write("read (parse + bind): ");
+		PrintResult(Measure(minSamples, scope () =>
+			{
+				doc.Read(input).IgnoreError();
+				let target = scope UiDocument();
+				target.KdlRead(doc.Root).IgnoreError();
+			}), input.Length);
+		Console.Write("bind only:           ");
+		PrintResult(Measure(minSamples, scope () =>
+			{
+				let target = scope UiDocument();
+				target.KdlRead(doc.Root).IgnoreError();
+			}), input.Length);
+		let output = scope String();
+		let target = scope KdlDocument();
+		Console.Write("write (build + text): ");
+		PrintResult(Measure(minSamples, scope () =>
+			{
+				target.Clear();
+				output.Clear();
+				ui.KdlWrite(target.Root).IgnoreError();
+				target.Write(output);
+			}), output.Length);
 		return 0;
 	}
 

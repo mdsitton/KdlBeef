@@ -29,6 +29,12 @@ Last reviewed: 2026-09-29.
 (From memory. The stream cursor cost the in-memory path about 5%: before it, the document read was
 230–299 and the event pass 307–345.)
 
+Typed (`KdlTester -bench typed bench/compare/inputs/ui.kdl 5`: the 5 MB UI markup into the
+`[KdlObject]` types of `KdlTester/src/TypedUi.bf`, 63,681 widgets through polymorphic
+`[KdlChildren]`, checked by a checksum before and after a write and re-read): read (parse + bind)
+30 ms, 159 MB/s; bind alone from a parsed document 10.6 ms, 453 MB/s; write (a new document from the
+objects, then its text) 22.6 ms, 187 MB/s of output.
+
 The fastest other implementation reads 33–49 MB/s (ckdl, events only) and writes up to 356 MB/s
 (kdl-rs, strings). `numbers` is below the plan's 150 MB/s document target: after the number fast
 paths it spends its time in the digit loops of hex/octal/binary and underscored tokens and in copying
@@ -59,7 +65,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
-| P6 | Rest of phase 6: the typed benchmark against kdl-rs serde, gokdl2 and KdlSharp (`plan.md` §6); `List<List<T>>` and dictionaries are not supported | S |
+| P6 | Rest of phase 6: typed harnesses for kdl-rs serde, gokdl2 and KdlSharp to compare with `KdlTester -bench typed` (`plan.md` §6); `List<List<T>>` and dictionaries are not supported | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order

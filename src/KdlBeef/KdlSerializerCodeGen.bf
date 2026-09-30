@@ -714,10 +714,31 @@ public static class KdlSerializerCodeGen
 	[Comptime]
 	static void EmitReadChildren(String code, StringView ownerName, StringView name, Type listType, Type element)
 	{
+		code.Append("\t{\n");
+		EmitReplaceList(code, "\t\t", name, listType, element);
+		code.Append("\t\tfor (let _c in _node.Children)\n\t\t{\n\t\t\tif (KdlBeef.KdlBind.IsClaimed(_c.Name, sKdlClaimed))\n\t\t\t\tcontinue;\n");
+		// The item types are found when this method is compiled, not now: they may derive from the type
+		// being generated (a Container holding Rows and Columns), which is not complete yet
+		code.AppendF("\t\t\tSystem.Compiler.Mixin(KdlBeef.KdlSerializerCodeGen.ChildrenDispatch(typeof({}), ", element.GetFullName(.. scope .()));
+		AppendLiteral(code, ownerName);
+		code.Append(", ");
+		AppendLiteral(code, name);
+		code.Append("));\n\t\t}\n\t}\n");
+	}
+
+	/// @brief The `switch` that reads child `_c` into the [KdlChildren] list `fieldName`, one case per
+	/// [KdlObject] type the list can hold. Mixed into the generated KdlRead when it is compiled.
+	/// @param element The list's item type.
+	/// @param ownerName The type holding the list, for errors.
+	/// @param fieldName The list field.
+	/// @return The code.
+	[Comptime]
+	public static String ChildrenDispatch(Type element, String ownerName, String fieldName)
+	{
 		let types = scope List<Type>();
 		ChildTypes(element, types);
 		if (types.IsEmpty)
-			Fail(ownerName, name, scope $"[KdlChildren] found no [KdlObject] type for {element.GetFullName(.. scope .())}: mark the item types [KdlObject]");
+			Fail(ownerName, fieldName, scope $"[KdlChildren] found no [KdlObject] type for {element.GetFullName(.. scope .())}: mark the item types [KdlObject]");
 		let expected = scope String();
 		for (let type in types)
 		{
@@ -725,20 +746,20 @@ public static class KdlSerializerCodeGen
 				expected.Append(", ");
 			NodeName(type, expected);
 		}
-		code.Append("\t{\n");
-		EmitReplaceList(code, "\t\t", name, listType, element);
-		code.Append("\t\tfor (let _c in _node.Children)\n\t\t{\n\t\t\tif (KdlBeef.KdlBind.IsClaimed(_c.Name, sKdlClaimed))\n\t\t\t\tcontinue;\n\t\t\tswitch (_c.Name)\n\t\t\t{\n");
+		let code = new String();
+		code.Append("switch (_c.Name)\n{\n");
 		for (let type in types)
 		{
 			let typeName = type.GetFullName(.. scope .());
-			code.Append("\t\t\tcase ");
+			code.Append("case ");
 			AppendLiteral(code, NodeName(type, .. scope .()));
 			if (type.IsValueType)
-				code.AppendF(":\n\t\t\t\t{0} _o = .();\n\t\t\t\tTry!(_o.KdlRead(_c, _alloc));\n\t\t\t\tthis.{1}.Add(_o);\n", typeName, name);
+				code.AppendF(":\n\t{0} _o = .();\n\tTry!(_o.KdlRead(_c, _alloc));\n\tthis.{1}.Add(_o);\n", typeName, fieldName);
 			else
-				code.AppendF(":\n\t\t\t\tlet _o = {0};\n\t\t\t\tthis.{1}.Add(_o);\n\t\t\t\tTry!(_o.KdlRead(_c, _alloc));\n", NewExpr(typeName, "", .. scope .()), name);
+				code.AppendF(":\n\tlet _o = {0};\n\tthis.{1}.Add(_o);\n\tTry!(_o.KdlRead(_c, _alloc));\n", NewExpr(typeName, "", .. scope .()), fieldName);
 		}
-		code.AppendF("\t\t\tdefault:\n\t\t\t\treturn .Err(KdlBeef.KdlBind.UnknownChild(_c, \"{}\"));\n\t\t\t}}\n\t\t}}\n\t}}\n", expected);
+		code.AppendF("default:\n\treturn .Err(KdlBeef.KdlBind.UnknownChild(_c, \"{}\"));\n}}\n", expected);
+		return code;
 	}
 
 	[Comptime]
