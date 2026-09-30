@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 # The pinned clone fetched by ../fetch.sh (kdl 6.7.1, KDL v2, format-preserving)
 kdl = { path = "../deps/kdl-rs" }
+# For the typed mode: kdl's serde support (kdl::de / kdl::se, on by default) with derived types
+serde = { version = "1", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

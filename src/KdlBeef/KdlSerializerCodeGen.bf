@@ -770,8 +770,12 @@ public static class KdlSerializerCodeGen
 			code.Append("\t\t\tTry!(_e.KdlWrite(KdlBeef.KdlBind.FreeChild(_node, _i++, _e.KdlNodeName, sKdlClaimed)));\n");
 		else
 		{
-			// The item's own type decides its node name and fields
-			code.Append("\t\t\tlet _s = _e as KdlBeef.IKdlSerializable;\n\t\t\tif (_s == null)\n\t\t\t\tcontinue;\n");
+			// The item's own type decides its node name and fields: call through the interface, which
+			// dispatches on it (a [KdlObject] subclass hides its base's methods rather than overriding)
+			if (element.HasCustomAttribute<KdlObjectAttribute>())
+				code.Append("\t\t\tif (_e == null)\n\t\t\t\tcontinue;\n\t\t\tKdlBeef.IKdlSerializable _s = _e;\n");
+			else
+				code.Append("\t\t\tlet _s = _e as KdlBeef.IKdlSerializable;\n\t\t\tif (_s == null)\n\t\t\t\tcontinue;\n");
 			code.Append("\t\t\tTry!(_s.KdlWrite(KdlBeef.KdlBind.FreeChild(_node, _i++, _s.KdlNodeName, sKdlClaimed)));\n");
 		}
 		code.Append("\t\t}\n\t\tKdlBeef.KdlBind.TrimFreeChildren(_node, _i, sKdlClaimed);\n\t}\n");

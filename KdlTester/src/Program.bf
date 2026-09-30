@@ -27,6 +27,20 @@ class Program
 {
 	public static int Main(String[] args)
 	{
+		if (args.Count > 0 && args[0] == "-bench-typed")
+		{
+			// bench/compare/typed.sh: one operation per run
+			int samples = 0;
+			if (args.Count >= 4 && int.Parse(args[3]) case .Ok(let parsed))
+				samples = parsed;
+			if (samples < 1)
+			{
+				Console.Error.WriteLine("usage: KdlTester -bench-typed <read|read-plain|write> <file> <min-samples>");
+				return 2;
+			}
+			sTypedMode = args[1];
+			return Bench("typed", args[2], samples);
+		}
 		if (args.Count > 0 && (args[0] == "-bench" || args[0] == "-bench-events"))
 		{
 			int minSamples = 0;
@@ -227,31 +241,52 @@ class Program
 		again.Tally(let count2, let sum2);
 		Console.WriteLine($"re-read check: {count2} {sum2}");
 
-		Console.Write("read (parse + bind): ");
-		PrintResult(Measure(minSamples, scope () =>
-			{
-				doc.Read(input).IgnoreError();
-				let target = scope UiDocument();
-				target.KdlRead(doc.Root).IgnoreError();
-			}), input.Length);
-		Console.Write("bind only:           ");
-		PrintResult(Measure(minSamples, scope () =>
-			{
-				let target = scope UiDocument();
-				target.KdlRead(doc.Root).IgnoreError();
-			}), input.Length);
-		let output = scope String();
-		let target = scope KdlDocument();
-		Console.Write("write (build + text): ");
-		PrintResult(Measure(minSamples, scope () =>
-			{
-				target.Clear();
-				output.Clear();
-				ui.KdlWrite(target.Root).IgnoreError();
-				target.Write(output);
-			}), output.Length);
+		StringView mode = sTypedMode;
+		if (mode.IsEmpty || mode == "read")
+		{
+			// KdlSerializer.Read: the document records positions, for located errors
+			Console.Write("read (parse + bind): ");
+			PrintResult(Measure(minSamples, scope () =>
+				{
+					let target = scope UiDocument();
+					KdlSerializer.Read(input, target).IgnoreError();
+				}), input.Length);
+		}
+		if (mode.IsEmpty || mode == "read-plain")
+		{
+			// A document without positions, then the bind (errors then carry no line numbers)
+			Console.Write("read, no positions:  ");
+			PrintResult(Measure(minSamples, scope () =>
+				{
+					doc.Read(input).IgnoreError();
+					let target = scope UiDocument();
+					target.KdlRead(doc.Root).IgnoreError();
+				}), input.Length);
+		}
+		if (mode.IsEmpty)
+		{
+			Console.Write("bind only:           ");
+			PrintResult(Measure(minSamples, scope () =>
+				{
+					let target = scope UiDocument();
+					target.KdlRead(doc.Root).IgnoreError();
+				}), input.Length);
+		}
+		if (mode.IsEmpty || mode == "write")
+		{
+			let output = scope String();
+			Console.Write("write (build + text): ");
+			PrintResult(Measure(minSamples, scope () =>
+				{
+					output.Clear();
+					KdlSerializer.Write(ui, output).IgnoreError();
+				}), output.Length);
+		}
 		return 0;
 	}
+
+	/// `-bench-typed`'s operation (empty: all of them, for `-bench typed`).
+	static String sTypedMode = "";
 
 	static int CountNodes(KdlNodeList nodes)
 	{

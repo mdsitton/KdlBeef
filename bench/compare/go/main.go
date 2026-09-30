@@ -1,5 +1,7 @@
 // Go KDL benchmark: kdlbench <gokdl2|kdly> <parse|write> <file> <min-samples>
 //
+//	kdlbench typed gokdl2 <read|write> <file> <min-samples> - typed mapping, see typed.go
+//
 //	gokdl2 - github.com/njreid/gokdl2: ParseWithOptions (Version v2) into its document;
 //	         write is GenerateWithOptions with Version 2 (its default output is KDL v1)
 //	kdly   - codeberg.org/shimeoki/kdly: Parser.Parse into its lossless syntax tree;
@@ -89,6 +91,10 @@ func countKdly(nodes []kdly.Node) int {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "typed" {
+		runTyped(os.Args[2:])
+		return
+	}
 	if len(os.Args) < 5 {
 		fmt.Fprintln(os.Stderr, "usage: kdlbench <gokdl2|kdly> <parse|write> <file> <min-samples>")
 		os.Exit(2)

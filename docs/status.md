@@ -32,8 +32,11 @@ Last reviewed: 2026-09-29.
 Typed (`KdlTester -bench typed bench/compare/inputs/ui.kdl 5`: the 5 MB UI markup into the
 `[KdlObject]` types of `KdlTester/src/TypedUi.bf`, 63,681 widgets through polymorphic
 `[KdlChildren]`, checked by a checksum before and after a write and re-read): read (parse + bind)
-30 ms, 159 MB/s; bind alone from a parsed document 10.6 ms, 453 MB/s; write (a new document from the
-objects, then its text) 22.6 ms, 187 MB/s of output.
+30 ms, 159 MB/s (39 ms with positions for located errors, `KdlSerializer.Read`); bind alone from a
+parsed document 10.6 ms, 453 MB/s; write (a new document from the objects, then its text) 23 ms.
+`bench/compare/typed.sh` compares (`typed-results.md`): kdl-rs serde reads in 1476 ms, gokdl2 364,
+KdlSharp 324; writes take 125, 153 and 196 ms. None of them keeps an ordered mix of child kinds or
+the `(px)` annotations without help.
 
 The fastest other implementation reads 33–49 MB/s (ckdl, events only) and writes up to 356 MB/s
 (kdl-rs, strings). `numbers` is below the plan's 150 MB/s document target: after the number fast
@@ -65,7 +68,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 |----|------|------|
 | P3 | Rest of phase 3: the property hash index for nodes with more than 8 properties (`plan.md` §4.3) — add a lookup benchmark first (TomlBeef's `lookup.sh`) and build it only if scans of 5–20 properties show up; `numbers` document read (140 MB/s) | S |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
-| P6 | Rest of phase 6: typed harnesses for kdl-rs serde, gokdl2 and KdlSharp to compare with `KdlTester -bench typed` (`plan.md` §6); `List<List<T>>` and dictionaries are not supported | S |
+| P6 | `[KdlObject]` limits: `List<List<T>>` and dictionaries are not supported | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order

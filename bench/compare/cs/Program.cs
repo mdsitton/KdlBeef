@@ -1,13 +1,17 @@
 // C# KDL benchmark: KdlSharpBench <parse|write> <file> <min-samples>
+//                   KdlSharpBench typed <read|write> <file> <min-samples>   (see Typed.cs)
 // KdlSharp: KdlDocument.Parse (KDL v2 by default) into its document; write is ToKdlString of the
 // document parsed once. Prints the node count as a check line. Timings follow the shared rule (see
 // Measure and ../run.sh); the 1 s warm-up also lets the JIT compile the parser.
 using System.Diagnostics;
 using KdlSharp;
 
+if (args.Length >= 1 && args[0] == "typed")
+	return TypedBench.Run(args, Measure);
+
 if (args.Length < 3)
 {
-	Console.Error.WriteLine("usage: KdlSharpBench <parse|write> <file> <min-samples>");
+	Console.Error.WriteLine("usage: KdlSharpBench <parse|write|typed <read|write>> <file> <min-samples>");
 	return 2;
 }
 
