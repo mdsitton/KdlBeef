@@ -341,7 +341,8 @@ edits regenerate only what changed. Slashdashed content is kept as text, not par
 Trivia sidecar, slashdash structure, preserving writer, mutation API; every valid suite input
 round-trips byte for byte; edits keep neighboring formatting.
 
-**Phase 6 — `[KdlObject]`.** *Done (`architecture.md` §6); the typed benchmark is still to do.*
+**Phase 6 — `[KdlObject]`.** *Done (`architecture.md` §6); typed benchmark in
+`bench/compare/typed.sh` (`typed-results.md`).*
 Port the TomlBeef generator with KDL roles; typed benchmark against kdl-rs serde, gokdl2 and KdlSharp.
 
 **Phase 7 — Extras as needed.** Streaming `KdlWriter`, KQL, v1 input, JSON-in-KDL.
