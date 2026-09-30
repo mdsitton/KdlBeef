@@ -105,6 +105,9 @@ public class KdlDocument
 	/// Preserving write: the node just written ended without a terminator (it was last before a `}` or
 	/// the end in the source), so a node written next needs one first.
 	bool mNeedTerminator;
+	/// Preserving write: the node just written ended inside a `//` comment the end of the input closed,
+	/// so even a `}` written next needs a newline first.
+	bool mInComment;
 	/// Changes on every Clear and Read, so handles from before can tell they are stale.
 	internal uint32 mGeneration;
 	/// The reader behind Read, kept for its buffers.

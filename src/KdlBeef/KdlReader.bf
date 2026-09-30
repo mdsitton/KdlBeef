@@ -175,6 +175,10 @@ public class KdlReader
 	internal int ValueStart => mStreaming ? mStream.mValueStart : mBytes.mValueStart;
 	internal int BlockOpenEnd => mStreaming ? mStream.mBlockOpenEnd : mBytes.mBlockOpenEnd;
 	internal int BlockCloseEnd => mStreaming ? mStream.mBlockCloseEnd : mBytes.mBlockCloseEnd;
+	/// EndNode: the node ended with a terminator (not at a `}` or the end of the input).
+	internal bool NodeTerminated => mStreaming ? mStream.mEndTerminated : mBytes.mEndTerminated;
+	/// EndNode: the node ended inside a `//` comment the end of the input closed.
+	internal bool NodeEndsInComment => mStreaming ? mStream.mEndInComment : mBytes.mEndInComment;
 
 	/// The line and column of an offset at or after the current event's start (Positions).
 	internal bool Locate(int offset, out int line, out int column)
@@ -302,6 +306,13 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	int mPendingBlockOpen;
 	/// EndNode: just after the node's `}`.
 	internal int mBlockCloseEnd;
+	/// EndNode: the node ended with a terminator (a newline, `;`, or a `//` comment and its newline);
+	/// false when it ended at the parent's `}` or the end of the input. Whatever follows a node that did
+	/// not needs a terminator first (PreserveStyle moves).
+	internal bool mEndTerminated;
+	/// EndNode: the node ended in a `//` comment that the end of the input closed: a `}` written after
+	/// it would be inside the comment.
+	internal bool mEndInComment;
 	/// Just past the last name, value or `}` read (slashdashed ones included).
 	int mLastTokenEnd;
 
@@ -449,6 +460,9 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	void SkipToTerminator()
 	{
 		int depth = 0;
+		// How the node ends, for its EndNode (see mEndTerminated): not by a terminator unless one is found
+		mEndTerminated = false;
+		mEndInComment = false;
 		while (Avail(mPos))
 		{
 			int newline = NewlineAt(mPos);
@@ -456,7 +470,10 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			{
 				mPos += newline;
 				if (depth == 0)
+				{
+					mEndTerminated = true;
 					return;
+				}
 				continue;
 			}
 			char8 c = mData[mPos];
@@ -465,7 +482,10 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			case ';':
 				mPos++;
 				if (depth == 0)
+				{
+					mEndTerminated = true;
 					return;
+				}
 			case '{':
 				depth++;
 				mPos++;
@@ -496,9 +516,13 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 				}
 				else if (PeekAt(1) == '/')
 				{
-					SkipSingleLineComment();
+					bool newlineEnded = SkipSingleLineComment();
 					if (depth == 0)
+					{
+						mEndTerminated = newlineEnded;
+						mEndInComment = !newlineEnded;
 						return;
+					}
 				}
 				else
 					mPos++;
@@ -646,6 +670,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			if (mClosingAtEnd)
 			{
 				// CollectErrors, after reporting an unclosed block: close what is open
+				mEndTerminated = false;
+				mEndInComment = false;
 				return EndNode() ? KdlEvent.EndNode : cNoEvent;
 			}
 			ref Frame open = ref mFrames.Back;
@@ -731,7 +757,12 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		if (Try!(SkipNodeSpace()))
 			space = true;
 		if (!Avail(mPos))
+		{
+			// Ended by the end of the input
+			mEndTerminated = false;
+			mEndInComment = false;
 			return EndNode() ? KdlEvent.EndNode : cNoEvent;
+		}
 		char8 c = mData[mPos];
 		if (Try!(AtTerminator(c)))
 			return EndNode() ? KdlEvent.EndNode : cNoEvent;
@@ -755,17 +786,24 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	[Inline]
 	Result<bool, KdlFailure> AtTerminator(char8 c)
 	{
+		mEndTerminated = true;
+		mEndInComment = false;
 		int newline = NewlineAt(mPos);
 		if (newline > 0)
 			mPos += newline;
 		else if (c == ';')
 			mPos++;
 		else if (c == '/' && PeekAt(1) == '/')
-			SkipSingleLineComment();
+		{
+			// A comment the end of the input closes is no terminator
+			mEndTerminated = SkipSingleLineComment();
+			mEndInComment = !mEndTerminated;
+		}
 		else if (c == '}')
 		{
 			if (mFrames.Count < 2)
 				return .Err(Fail(.UnbalancedBraces, "Unexpected `}` without a matching `{`", mPos));
+			mEndTerminated = false;
 		}
 		else
 			return false;
@@ -1091,7 +1129,8 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	}
 
 	/// Skips a `//` comment and the newline that ends it.
-	void SkipSingleLineComment()
+	/// @return Whether a newline ended the comment (false: the input did).
+	bool SkipSingleLineComment()
 	{
 		mPos += 2;
 		while (Avail(mPos))
@@ -1101,10 +1140,11 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			if (n > 0)
 			{
 				mPos += n;
-				return;
+				return true;
 			}
 			mPos++;
 		}
+		return false;
 	}
 
 	/// Skips `node-space*`: whitespace, and line continuations (`\` then a newline or `//` comment).

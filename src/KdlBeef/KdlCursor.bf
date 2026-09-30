@@ -234,7 +234,7 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		while (mRaw < mState.mBuffer.Count && !mDone)
 			ReadMore();
 		Validate();
-		SetWindow(ref data, ref windowStart, ref end);
+		SetWindow(ref data, ref windowStart, ref end, start);
 		if (mState.mHasError)
 			return .Err(mState.MakeError());
 		return start;
@@ -242,16 +242,20 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 
 	public bool Fill(ref char8* data, ref int windowStart, ref int end, int keep, int pos, int count) mut
 	{
-		int oldEnd = mBase + mValid;
+		int oldEnd = end;
+		int from = Math.Min(keep, pos);
+		// The reader would hold the construct from `from` through what it looks at (its lookahead
+		// included) at once: that is what MaxTokenBytes bounds, whatever the buffer's size. Only when
+		// those bytes exist (in the buffer, or maybe still in the stream): at the end of the input a
+		// construct that fills the limit exactly is within it.
+		if (mMaxTokenBytes > 0 && pos + count - from > mMaxTokenBytes && (pos + count <= mBase + mValid || !mDone))
+		{
+			SetError(.ResourceLimitExceeded, scope $"A token or entry is longer than MaxTokenBytes ({mMaxTokenBytes})", from + mMaxTokenBytes);
+			SetWindow(ref data, ref windowStart, ref end, from);
+			return false;
+		}
 		while (mBase + mValid < pos + count && !mDone)
 		{
-			// The reader would hold the construct from `keep` through what it looks at (its lookahead
-			// included) at once: that is what MaxTokenBytes bounds, whatever the buffer's size
-			if (mMaxTokenBytes > 0 && pos + count - Math.Min(keep, pos) > mMaxTokenBytes)
-			{
-				SetError(.ResourceLimitExceeded, scope $"A token or entry is longer than MaxTokenBytes ({mMaxTokenBytes})", Math.Min(keep, pos) + mMaxTokenBytes);
-				break;
-			}
 			// Drop what the reader is done with, counting its lines first
 			int drop = Math.Min(keep, pos) - mBase;
 			// Never just after a CR: an LF may follow (not read yet, perhaps), and the line counter would
@@ -286,15 +290,20 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 			ReadMore();
 			Validate();
 		}
-		SetWindow(ref data, ref windowStart, ref end);
+		SetWindow(ref data, ref windowStart, ref end, from);
 		return end > oldEnd;
 	}
 
-	void SetWindow(ref char8* data, ref int windowStart, ref int end)
+	/// The window: the validated bytes, but with MaxTokenBytes no more than that from `from` (the
+	/// construct being read), so a longer construct always comes to Fill's check, even when the buffer
+	/// (at least 4 bytes, for encodings) is larger than the limit.
+	void SetWindow(ref char8* data, ref int windowStart, ref int end, int from)
 	{
 		data = Buffer - mBase;
 		windowStart = mBase;
 		end = mBase + mValid;
+		if (mMaxTokenBytes > 0 && from + mMaxTokenBytes < end)
+			end = Math.Max(from + mMaxTokenBytes, mBase);
 	}
 
 	/// Reads once into the free part of the buffer.

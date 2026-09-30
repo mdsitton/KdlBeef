@@ -5,7 +5,7 @@ using internal KdlBeef;
 namespace KdlBeef;
 
 [AllowDuplicates]
-internal enum KdlStyleFlags : uint8
+internal enum KdlStyleFlags : uint16
 {
 	None = 0,
 	/// The pieces were read from the source (a node or entry added in code has none).
@@ -18,7 +18,12 @@ internal enum KdlStyleFlags : uint8
 	HeadPrefixDirty = 16,
 	/// Regenerate an entry's value, or its key, `=` and annotation.
 	ValueDirty = 32,
-	PrefixDirty = 64
+	PrefixDirty = 64,
+	/// The node's tail ends with its terminator (the reader saw a newline, `;` or `//` comment and its
+	/// newline); otherwise it was last before a `}` or the end.
+	Terminated = 128,
+	/// The node's tail ends inside a `//` comment the end of the input closed.
+	EndsInComment = 256
 }
 
 /// PreserveStyle: a node's source text, in the order it is written back.
@@ -155,6 +160,10 @@ extension KdlDocument
 			from = reader.BlockCloseEnd;
 		}
 		style.mTail = Piece(slice, start, from, start + slice.Length);
+		if (reader.NodeTerminated)
+			style.mFlags |= .Terminated;
+		if (reader.NodeEndsInComment)
+			style.mFlags |= .EndsInComment;
 	}
 
 	void CaptureEnd(KdlReader reader)
@@ -172,6 +181,7 @@ extension KdlDocument
 			output.Append("\u{FEFF}");
 		mWriteStart = output.Length;
 		mNeedTerminator = false;
+		mInComment = false;
 		uint32 id = mNodes[0].mFirstChild;
 		int depth = 0;
 		while (id != 0)
@@ -230,6 +240,7 @@ extension KdlDocument
 		{
 			output.Append('\n');
 			mNeedTerminator = false;
+			mInComment = false;
 		}
 		if (captured && !style.mFlags.HasFlag(.LeadingDirty))
 			output.Append(style.mLeading);
@@ -281,7 +292,13 @@ extension KdlDocument
 		if (hasBlock)
 		{
 			if (style.mFlags.HasFlag(.HasBlock))
+			{
+				// The last child's tail may end in a `//` comment the end of the input closed (it moved
+				// here from the end): the `}` would be inside it
+				if (mInComment)
+					output.Append('\n');
 				output.Append(style.mBlockEnd);
+			}
 			else
 			{
 				if (!output.EndsWith('\n'))
@@ -289,51 +306,21 @@ extension KdlDocument
 				AppendIndent(output, depth);
 				output.Append('}');
 			}
+			mInComment = false;
 		}
 		if (style.mFlags.HasFlag(.Captured))
 		{
+			// How the node ended in the source, as the reader saw it: what follows may need a terminator
 			output.Append(style.mTail);
-			mNeedTerminator = !EndsWithTerminator(style.mTail);
+			mNeedTerminator = !style.mFlags.HasFlag(.Terminated);
+			mInComment = style.mFlags.HasFlag(.EndsInComment);
 		}
 		else
 		{
 			output.Append('\n');
 			mNeedTerminator = false;
+			mInComment = false;
 		}
-	}
-
-	/// Whether a node's captured tail ends the node: it runs through the terminator (a newline, `;`, or
-	/// a `//` comment and its newline), so it ends with one unless the node was last before a `}` or
-	/// the end. A newline that ends a line continuation (`\`, spaces, an optional `//` comment) does not
-	/// count.
-	static bool EndsWithTerminator(StringView tail)
-	{
-		if (tail.IsEmpty)
-			return false;
-		if (tail[tail.Length - 1] == ';')
-			return true;
-		// The last code point: a newline?
-		int last = tail.Length - 1;
-		while (last > 0 && ((uint8)tail[last] & 0xC0) == 0x80)
-			last--;
-		if (!KdlChar.IsNewline(KdlChar.Decode(tail.Ptr, last, ?)))
-			return false;
-		if (last > 0 && tail[last] == '\n' && tail[last - 1] == '\r')
-			last--;
-		// The line it ends, from just after the previous newline: a line continuation if it starts with
-		// `\` after spaces
-		int start = 0;
-		int i = 0;
-		while (i < last)
-		{
-			char32 cp = KdlChar.Decode(tail.Ptr, i, let length);
-			i += length;
-			if (KdlChar.IsNewline(cp))
-				start = i;
-		}
-		StringView line = tail.Substring(start, last - start);
-		line.TrimStart();
-		return !line.StartsWith('\\');
 	}
 
 	void AppendIndent(String output, int depth)

@@ -653,30 +653,53 @@ public static class KdlBind
 	public static Result<int64, KdlParseError> IntegerKey(KdlNode entry, int64 min, int64 max)
 	{
 		StringView name = entry.Name;
+		if (!KeyMagnitude(name, let negative, let magnitude))
+			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is not an integer", .InvalidValue));
+		// The magnitude is unsigned, so int64.MinValue (magnitude 2^63) fits
+		bool inRange = negative ? magnitude <= (uint64)int64.MaxValue + 1 : magnitude <= (uint64)int64.MaxValue;
+		int64 key = negative ? (int64)(0 &- magnitude) : (int64)magnitude;
+		if (!inRange || key < min || key > max)
+			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is outside the range {min} to {max}", .InvalidValue));
+		return key;
+	}
+
+	/// @brief A dictionary entry's name as a uint64 key (decimal, up to 18446744073709551615).
+	/// @param entry The entry node.
+	/// @return The key, or an error located at the entry.
+	public static Result<uint64, KdlParseError> UnsignedKey(KdlNode entry)
+	{
+		StringView name = entry.Name;
+		if (!KeyMagnitude(name, let negative, let magnitude))
+			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is not an integer", .InvalidValue));
+		if (negative && magnitude != 0)
+			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is outside the range 0 to {uint64.MaxValue}", .InvalidValue));
+		return magnitude;
+	}
+
+	/// A decimal key's sign and magnitude (`-12`, `+3`, `40`), or false when it is not one or does not
+	/// fit a uint64.
+	static bool KeyMagnitude(StringView name, out bool negative, out uint64 magnitude)
+	{
 		StringView digits = name;
-		bool negative = false;
+		negative = false;
+		magnitude = 0;
 		if (digits.StartsWith('-') || digits.StartsWith('+'))
 		{
 			negative = digits[0] == '-';
 			digits = digits.Substring(1);
 		}
-		int64 magnitude = 0;
-		bool valid = !digits.IsEmpty;
+		if (digits.IsEmpty)
+			return false;
 		for (let c in digits)
 		{
-			if (c < '0' || c > '9' || magnitude > (int64.MaxValue - (c - '0')) / 10)
-			{
-				valid = false;
-				break;
-			}
-			magnitude = magnitude * 10 + (c - '0');
+			if (c < '0' || c > '9')
+				return false;
+			uint64 digit = (uint64)(c - '0');
+			if (magnitude > (uint64.MaxValue - digit) / 10)
+				return false;
+			magnitude = magnitude * 10 + digit;
 		}
-		if (!valid)
-			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is not an integer", .InvalidValue));
-		int64 key = negative ? -magnitude : magnitude;
-		if (key < min || key > max)
-			return .Err(MakeError(entry, -1, default, scope $"the key {key} is outside the range {min} to {max}", .InvalidValue));
-		return key;
+		return true;
 	}
 
 	/// @brief The error for a dictionary entry whose name is no case of its enum key type.

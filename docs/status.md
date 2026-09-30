@@ -6,13 +6,13 @@ Last reviewed: 2026-09-30. The deep review and reproduced issues are in [review.
 
 | Check | Expected result |
 |-------|-----------------|
-| `beefbuild -test` (Debug checks) | 74/74 pass |
-| `beefbuild -test -config=TestRelease` (Release settings) | 74/74 pass |
+| `beefbuild -test` (Debug checks) | 79/79 pass |
+| `beefbuild -test -config=TestRelease` (Release settings) | 79/79 pass |
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 74/74 pass |
+| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 79/79 pass |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 16 implementations on 6 inputs (knus on KDL v1 translations in `inputs/v1/`); results in `bench/compare/results.md`; `bench/compare/plot.py` redraws the README charts (`docs/benchmark*.svg`) from it and `typed-results.md` |
 
@@ -74,14 +74,13 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 
 | ID | Item | Size |
 |----|------|------|
-| R | [Deep review](review.md) follow-ups (R1-R9, the quadratic typed lists, decimal big integers and idle-whitespace retention are fixed, see its *Resolution*): the review's API additions (entry annotation setters, strict typed binding, unsigned getters, editable slashdashed content) | M |
+| R | [Review](review.md) follow-ups: R1-R9 and F1-F5 are fixed, each with a regression test (see the review's resolutions). Left: the review's optional API additions (entry annotation setters, strict typed binding, unsigned getters, editable slashdashed content) | M |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order
 
-The plan's must-have features are implemented, and the deep review's confirmed bugs (R1-R9) and
-measured quadratic paths are fixed, each with a regression test (`tests/KdlReviewTests.bf`). The
-review's remaining recommendations (the R row) and the planned refinements (P5) and more
-lookup API can follow as the UI framework needs them. Phase 7's KQL, JSON-in-KDL, v1 input and streaming writer remain dropped
-(`plan.md` §6).
+The review's findings (R1-R9, and the follow-up's F1-F5) are fixed with regression tests in
+`tests/KdlReviewTests.bf`, and the measured quadratic paths are linear. Optional API additions, planned refinements (P5)
+and more lookup API can follow as the UI framework needs them. Phase 7's KQL, JSON-in-KDL, v1 input
+and streaming writer remain dropped (`plan.md` §6).

@@ -89,13 +89,22 @@ public static class KdlSerializerCodeGen
 		// so that a base's list also leaves alone the children a subclass's fields claim
 		if (claimedCount > 0)
 			read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
+		// Likewise the first argument a [KdlArguments] list takes: a subclass's [KdlArgument] fields move
+		// it, including for a list its base declares (whose code was generated before the subclass)
 		StringView claimedExpr;
+		let argumentsStart = scope String();
 		if (type.IsValueType)
+		{
 			claimedExpr = (claimedCount > 0) ? "sKdlClaimed" : "default";
+			argumentsStart.AppendF("{}", nextArgument);
+		}
 		else
 		{
 			claimedExpr = "this.KdlClaimedChildNames";
-			read.Insert(0, scope $"protected {baseIsObject ? "override" : "virtual"} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
+			StringView overriding = baseIsObject ? "override" : "virtual";
+			read.Insert(0, scope $"protected {overriding} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
+			read.Insert(0, scope $"protected {overriding} int KdlArgumentsStart => {nextArgument};\n");
+			argumentsStart.Append("this.KdlArgumentsStart");
 		}
 
 		// 2. Every field's plan (its kinds and role), checked before any code is written
@@ -117,8 +126,8 @@ public static class KdlSerializerCodeGen
 				EmitReadScalar(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mRole, plan.mIndex, plan.mType, plan.mKind, plan.mConverter, naming);
 				EmitWriteScalar(write, fieldName, plan.mKey, plan.mAliases, plan.mRole, plan.mIndex, plan.mType, plan.mKind, plan.mConverter, naming);
 			case .Arguments, .ChildArguments:
-				EmitReadScalarList(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mRole, plan.mIndex, plan.mType, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
-				EmitWriteScalarList(write, fieldName, plan.mKey, plan.mAliases, plan.mRole, plan.mIndex, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
+				EmitReadScalarList(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mRole, argumentsStart, plan.mType, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
+				EmitWriteScalarList(write, fieldName, plan.mKey, plan.mAliases, plan.mRole, argumentsStart, plan.mElement, plan.mElementKind, plan.mElementConverter, naming);
 			case .ChildObject:
 				EmitReadObject(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mType);
 				EmitWriteObject(write, fieldName, plan.mKey, plan.mAliases, plan.mType);
@@ -794,13 +803,15 @@ public static class KdlSerializerCodeGen
 	}
 
 	[Comptime]
-	static void EmitReadScalarList(String code, StringView name, StringView key, List<String> aliases, bool required, Role role, int index, Type listType, Type element, Kind kind, Type converter, KdlNaming naming)
+	/// A List of scalars: the arguments from `argumentsStart` on (an expression: [KdlArguments]), or a
+	/// child node's arguments.
+	static void EmitReadScalarList(String code, StringView name, StringView key, List<String> aliases, bool required, Role role, StringView argumentsStart, Type listType, Type element, Kind kind, Type converter, KdlNaming naming)
 	{
 		code.Append("\t{\n");
 		StringView req = required ? "true" : "false";
 		if (role == .Arguments)
 		{
-			code.AppendF("\t\tlet _args = _node;\n\t\tint _from = {};\n", index);
+			code.AppendF("\t\tlet _args = _node;\n\t\tint _from = {};\n", argumentsStart);
 			code.AppendF("\t\tif (KdlBeef.KdlBind.ArgumentCount(_node) <= _from && {})\n\t\t\treturn .Err(KdlBeef.KdlBind.MakeError(_node, -1, default, \"arguments are required\", .MissingValue));\n", req);
 			code.Append("\t\tif (KdlBeef.KdlBind.ArgumentCount(_node) > _from)\n\t\t{\n");
 		}
@@ -818,12 +829,12 @@ public static class KdlSerializerCodeGen
 	}
 
 	[Comptime]
-	static void EmitWriteScalarList(String code, StringView name, StringView key, List<String> aliases, Role role, int index, Type element, Kind kind, Type converter, KdlNaming naming)
+	static void EmitWriteScalarList(String code, StringView name, StringView key, List<String> aliases, Role role, StringView argumentsStart, Type element, Kind kind, Type converter, KdlNaming naming)
 	{
 		// A null list removes what it maps (its arguments, or its child node), like a null String
 		code.Append("\t{\n");
 		if (role == .Arguments)
-			code.AppendF("\t\tvar _ac = KdlBeef.KdlArgumentCursor(_node, {});\n\t\tif (this.{} != null)\n\t\t{{\n", index, name);
+			code.AppendF("\t\tvar _ac = KdlBeef.KdlArgumentCursor(_node, {});\n\t\tif (this.{} != null)\n\t\t{{\n", argumentsStart, name);
 		else
 		{
 			for (let alias in aliases)
@@ -953,13 +964,15 @@ public static class KdlSerializerCodeGen
 	{
 		if (type.IsValueType)
 			return;
+		// A container item or value may be null (writing skips a null one): nothing to enumerate then,
+		// and `delete null` does nothing
 		if (let element = ListElement(type))
 		{
 			if (!element.IsValueType)
 			{
-				code.AppendF("{0}for (let _x{1} in ({2}))\n{0}{{\n", indent, depth, expr);
-				EmitDeleteOwned(code, scope $"{indent}\t", scope $"_x{depth}", element, depth + 1);
-				code.AppendF("{}}}\n", indent);
+				code.AppendF("{0}if (({2}) != null)\n{0}{{\n{0}\tfor (let _x{1} in ({2}))\n{0}\t{{\n", indent, depth, expr);
+				EmitDeleteOwned(code, scope $"{indent}\t\t", scope $"_x{depth}", element, depth + 1);
+				code.AppendF("{0}\t}}\n{0}}}\n", indent);
 			}
 		}
 		else if (let value = DictionaryValue(type))
@@ -967,11 +980,11 @@ public static class KdlSerializerCodeGen
 			bool ownsKeys = DictionaryKey(type) == typeof(String);
 			if (ownsKeys || !value.IsValueType)
 			{
-				code.AppendF("{0}for (let _x{1} in ({2}))\n{0}{{\n", indent, depth, expr);
+				code.AppendF("{0}if (({2}) != null)\n{0}{{\n{0}\tfor (let _x{1} in ({2}))\n{0}\t{{\n", indent, depth, expr);
 				if (ownsKeys)
-					code.AppendF("{}\tdelete _x{}.key;\n", indent, depth);
-				EmitDeleteOwned(code, scope $"{indent}\t", scope $"_x{depth}.value", value, depth + 1);
-				code.AppendF("{}}}\n", indent);
+					code.AppendF("{}\t\tdelete _x{}.key;\n", indent, depth);
+				EmitDeleteOwned(code, scope $"{indent}\t\t", scope $"_x{depth}.value", value, depth + 1);
+				code.AppendF("{0}\t}}\n{0}}}\n", indent);
 			}
 		}
 		code.AppendF("{}delete ({});\n", indent, expr);
@@ -1184,12 +1197,11 @@ public static class KdlSerializerCodeGen
 		let max = scope String();
 		if (IsUInt64(keyType))
 		{
-			// Keys above int64.MaxValue are not supported: the name is read as an int64
-			min.Append("0");
-			max.Append("int64.MaxValue");
+			// The whole uint64 range, as the writer writes it
+			code.AppendF("{}let {} = ({})Try!(KdlBeef.KdlBind.UnsignedKey({}));\n", indent, variable, keyTypeName, entry);
+			return;
 		}
-		else
-			IntegerRange(keyType, min, max);
+		IntegerRange(keyType, min, max);
 		code.AppendF("{}let {} = ({})Try!(KdlBeef.KdlBind.IntegerKey({}, {}, {}));\n", indent, variable, keyTypeName, entry, min, max);
 	}
 

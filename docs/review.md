@@ -448,3 +448,134 @@ Throughput after all of these: document read 254 MB/s on `ui` and 230 on `html-s
   `html-standard`.
 
 Not done, recorded in `status.md`: the API additions.
+
+## Follow-up review of the implemented fixes
+
+Reviewed on 2026-09-30 through `93b54e951397f4f3febecce3f064f8362c2d81dc`, including the R1-R9
+fixes, cursor and mapping follow-ups, nested containers and integer keys, number fast path, and
+reader split. The original reproductions have regression coverage and their fixes improve the code.
+Additional boundary probes reproduced the following five issues in both Debug and Release.
+No implementation changes were made during this follow-up review.
+
+### F1 (P1): PreserveStyle still corrupts node boundaries around comments
+
+Locations: [KdlDocument.Style.bf:278](../src/KdlBeef/KdlDocument.Style.bf#L278),
+[KdlDocument.Style.bf:309](../src/KdlBeef/KdlDocument.Style.bf#L309).
+
+The R2 fix only inserts a missing terminator before the next node's start. It does not do so before
+a captured parent block closes, and its EndsWithTerminator heuristic does not parse comments.
+
+Three reproduced cases:
+
+1. Read `"b\na 1 /* c */ \\\n"` with PreserveStyle and move the last node before the first.
+   The output is `"a 1 /* c */ \\\nb\n"`. It reads as one node `a` with arguments `1` and `b`,
+   rather than two nodes. The block comment before the continuation prevents the final line from
+   starting with a backslash, so EndsWithTerminator incorrectly treats its newline as a terminator.
+2. Read `"p { a }\nb // last"` with PreserveStyle and move `b` into `p`. The output is
+   `"p { a \n    b // last}\n"`. The parent's closing brace becomes part of the line comment,
+   and re-reading fails with an unclosed children block.
+3. Read `"a /*\n\\ */\nb\n"` with PreserveStyle and write without any edits. The output adds an
+   extra newline before `b`: `"a /*\n\\ */\n\nb\n"`. A backslash inside the block comment is
+   mistaken for a line continuation. This violates the unchanged byte-exact round-trip guarantee.
+
+Record the actual terminator state during parsing, or use a complete lexical scan of the tail.
+Account for boundaries before both sibling nodes and closing braces. Add semantic round-trip tests
+for the first two cases and an exact byte comparison for the third.
+
+### F2 (P1): replacing a nested collection containing null crashes
+
+Locations: [KdlSerializerCodeGen.bf:952](../src/KdlBeef/KdlSerializerCodeGen.bf#L952),
+[KdlSerializerCodeGen.bf:1073](../src/KdlBeef/KdlSerializerCodeGen.bf#L1073).
+
+The new recursive ownership cleanup emits foreach loops over nested Lists and Dictionaries before
+checking whether those containers are null. The writer already permits null container items and
+skips them; replacing that same object during a heap read is unsafe.
+
+Reproduction: a KdlObject has a `List<List<String>> values` initialized to a list containing one null
+item. Call `KdlSerializer.Read("values { - hello }", target)` with the default heap allocator.
+Both Debug and Release terminate with SIGSEGV (exit 139) while deleting the previous contents.
+GDB confirms a null List<String> enumeration from the generated `NestedNull.KdlRead`, before the
+replacement data is read.
+
+Guard recursive deletion against null containers before enumerating them. Cover null nested list
+items and null nested dictionary values when replacing existing objects, including failed reads.
+
+### F3 (P2): a base KdlArguments list still overlaps derived fixed arguments
+
+Locations: [KdlSerializerCodeGen.bf:79](../src/KdlBeef/KdlSerializerCodeGen.bf#L79),
+[KdlSerializerCodeGen.bf:803](../src/KdlBeef/KdlSerializerCodeGen.bf#L803),
+[KdlSerializerCodeGen.bf:826](../src/KdlBeef/KdlSerializerCodeGen.bf#L826).
+
+The R7 fix computes argument offsets across the chain when each type is generated, but the base
+type's already-generated KdlRead/KdlWrite still use its own constant offset. Calling those methods
+from a derived type does not update that offset to account for the derived type's fixed arguments.
+
+Reproduction: RestBase has `[KdlArguments] List<int> rest`; HeadDerived adds
+`[KdlArgument(0)] int head`. Reading `n 1 2 3` into HeadDerived yields `head=1` and `rest=[1,2,3]`
+instead of `[2,3]`. Set `head=10` and `rest=[20,30]`, then write back: the output is `n 10 30`,
+losing 20.
+
+Derive the rest-list offset from the effective runtime mapping, as claimed child names already do,
+or reject this inheritance configuration explicitly. The existing R7 test covers the opposite
+direction (fixed base argument plus derived rest list); add this direction for read and write.
+
+### F4 (P2): integer dictionary keys cannot round-trip their full range
+
+Locations: [KdlBind.bf:663](../src/KdlBeef/KdlBind.bf#L663),
+[KdlSerializerCodeGen.bf:1185](../src/KdlBeef/KdlSerializerCodeGen.bf#L1185).
+
+IntegerKey accumulates the magnitude in int64, so it rejects `-9223372036854775808` even though it is
+a valid int64 key. The uint64 key reader is additionally restricted to int64.MaxValue. The writer
+accepts and emits both values without an error.
+
+Reproduction: serialize a `Dictionary<int64, int>` containing `int64.MinValue`, then read the output
+back into the same type. Write succeeds; read fails saying the key is not an integer. A
+`Dictionary<uint64, int>` containing `uint64.MaxValue` fails in the same way. These are valid quoted
+KDL node names, so the rejection is in binding, not parsing.
+
+Use an unsigned magnitude and range checks appropriate to the key type. If a restricted range is
+intentional, document and enforce it on writing too. Add boundary round trips and out-of-range
+failures for all supported integer key widths.
+
+### F5 (P2): MaxTokenBytes values below four still bypass the limit
+
+Locations: [KdlCursor.bf:215](../src/KdlBeef/KdlCursor.bf#L215),
+[KdlCursor.bf:246](../src/KdlBeef/KdlCursor.bf#L246).
+
+The R5 fix raises the initial buffer to at least four bytes even when MaxTokenBytes is 1 or 2.
+When a short input reaches EOF during Begin, Fill's limit check never runs because mDone is already
+true. Reading the three-byte node name `abc` from a stream succeeds with either limit.
+
+Enforce the construct budget independently of the minimum buffer needed for encoding/lookahead,
+or reject unsupported small budgets explicitly. Extend the regression matrix below four bytes and
+include EOF discovered in the first buffer.
+
+### Follow-up verification
+
+- Linux and Windows unit tests: 74/74 in Debug and TestRelease.
+- Debug and Release spec suite: all four modes passed, 243 valid and 95 invalid cases per mode.
+- Debug and Release PreserveStyle suite: 245/245 in memory and through streams.
+- LeakSanitizer: no leaks in the existing test suite.
+- Original scratch probes rechecked R1, R3, R4, R7's original child mapping, R8 and R9 successfully.
+- F1-F5 were reproduced in both configurations. The F2 crash is outside the existing unit suite;
+  the passing leak check does not cover it.
+
+The new scratch workspace is `/tmp/kdl-followup-review`. Run `beefbuild -run` there for the move,
+inheritance, key-range and token-budget probes; run its built Probe binary with `nested-null` for
+the crash. The unchanged F1 input can also be passed directly to KdlTester with `-preserve`.
+The descriptions above are durable; /tmp is not a permanent project dependency.
+
+### Follow-up resolution
+
+Fixed on 2026-09-30, each with a regression test in `tests/KdlReviewTests.bf` (`F1_*` … `F5_*`) built
+from the reproductions above. All AGENTS.md checks pass: 79/79 tests in Debug and TestRelease on
+Linux and Windows, the suite in all four modes and the round trip with both binaries, no leaks. The
+`/tmp/kdl-followup-review` probes now report the expected results, including `nested-null` (exit 0).
+
+| ID | Fix |
+|---|---|
+| F1 | The reader records how each node ended (`mEndTerminated`: a newline, `;`, or a `//` comment and its newline; `mEndInComment`: a `//` comment the end of the input closed), and the document keeps it as style flags (`Terminated`, `EndsInComment`). The writer uses those instead of scanning the tail text (the heuristic `EndsWithTerminator` is gone): a newline before a node written after a node that did not end with a terminator, and before a captured `}` after one that ends in such a comment. Unchanged documents are untouched (comments are never re-read) |
+| F2 | The recursive cleanup checks a nested List or Dictionary for null before enumerating it |
+| F3 | Classes get a virtual `KdlArgumentsStart` (the chain's first free argument, overridden by subclasses, like `KdlClaimedChildNames`); a `[KdlArguments]` list reads and writes from it, so a base's list starts after a subclass's `[KdlArgument]` fields |
+| F4 | `IntegerKey` accumulates an unsigned magnitude (so `int64.MinValue` reads) and checks each type's range; `uint64` keys read through `UnsignedKey`, the whole range |
+| F5 | The stream window is capped at the construct's start plus MaxTokenBytes even when the buffer (at least 4 bytes) is larger, and `Fill` checks the budget before anything else, failing when the bytes past the limit exist (in the buffer, or maybe in the stream); a construct that fills the limit exactly at the end of the input is within it |

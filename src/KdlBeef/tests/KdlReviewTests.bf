@@ -67,6 +67,60 @@ class Nested
 	}
 }
 
+/// F2: containers whose items or values may be null when a read replaces them
+[KdlObject]
+class NestedNull
+{
+	public List<List<String>> Values;
+	public Dictionary<String, Dictionary<String, String>> Maps;
+
+	public ~this()
+	{
+		if (Values != null)
+		{
+			for (let inner in Values)
+			{
+				if (inner != null)
+					DeleteContainerAndItems!(inner);
+			}
+			delete Values;
+		}
+		if (Maps != null)
+		{
+			for (let entry in Maps)
+			{
+				delete entry.key;
+				if (entry.value != null)
+					DeleteDictionaryAndKeysAndValues!(entry.value);
+			}
+			delete Maps;
+		}
+	}
+}
+
+/// F3: a [KdlArguments] list in the base, a fixed argument in the subclass
+[KdlObject]
+class RestBase
+{
+	[KdlArguments] public List<int32> Rest ~ delete _;
+}
+
+[KdlObject]
+class HeadDerived : RestBase
+{
+	[KdlArgument(0)] public int32 Head;
+}
+
+/// F4: integer keys at their types' limits
+[KdlObject]
+class IntegerKeys
+{
+	public Dictionary<int64, int32> Signed ~ delete _;
+	public Dictionary<uint64, int32> Unsigned ~ delete _;
+	public Dictionary<int8, int32> Small ~ delete _;
+	public Dictionary<uint32, int32> Medium ~ delete _;
+}
+
 [KdlObject]
 class ReviewProbe
 {
@@ -858,6 +912,120 @@ static class KdlReviewTests
 		{
 		case .Ok: Test.Assert(false, "out of int32's range");
 		case .Err(let error): Test.Assert(error.mKind == .InvalidValue && error.mMessage.Contains("outside the range"), error.ToString(.. scope .()));
+		}
+	}
+
+	// Follow-up review (docs/review.md F1-F5)
+
+	[Test]
+	public static void F1_BoundariesAroundComments()
+	{
+		{
+			// A block comment before a line continuation: the node ended at the end, not with a newline
+			let doc = ReadPreserving(scope KdlDocument(), "b\na 1 /* c */ \\\n");
+			doc.Nodes.Last.MoveBefore(doc.Nodes.First);
+			AssertSameStructure(doc, "block comment before a line continuation");
+		}
+		{
+			// A `//` comment the end of the input closed, moved into a block: the `}` must not follow it
+			let doc = ReadPreserving(scope KdlDocument(), "p { a }\nb // last");
+			doc.Nodes.Last.MoveInto(doc.Root.Find("p"));
+			AssertSameStructure(doc, "a closing comment moved before a `}`");
+		}
+		{
+			// And moved before a sibling
+			let doc = ReadPreserving(scope KdlDocument(), "a\nb // last");
+			doc.Nodes.Last.MoveBefore(doc.Nodes.First);
+			AssertSameStructure(doc, "a closing comment moved before a node");
+		}
+		// Unchanged: byte for byte, whatever the comments hold
+		for (let text in StringView[]("a /*\n\\ */\nb\n", "a // x \\\nb\n", "p { a /* } */ }\nq", "a \\ // c\n  1\nb"))
+		{
+			let doc = ReadPreserving(scope KdlDocument(), text);
+			let output = doc.Write(.. scope .());
+			Test.Assert(output == text, scope $"`{text}` written as `{output}`");
+		}
+	}
+
+	[Test]
+	public static void F2_ReplacingNullNestedItems()
+	{
+		let target = scope NestedNull();
+		target.Values = new .();
+		target.Values.Add(null);
+		target.Values.Add(new .() { new .("old") });
+		target.Maps = new .();
+		target.Maps.Add(new .("gone"), null);
+		Test.Assert(KdlSerializer.Read("values { - hello }\nmaps { m { k v } }", target) case .Ok);
+		Test.Assert(target.Values.Count == 1 && target.Values[0][0] == "hello" && target.Maps["m"]["k"] == "v");
+
+		// A failed read into containers holding nulls
+		target.Values.Add(null);
+		target.Maps.Add(new .("empty"), null);
+		Test.Assert(KdlSerializer.Read("values { - a; - b }\nmaps { m { k 1 } }", target) case .Err);
+	}
+
+	[Test]
+	public static void F3_BaseArgumentListAfterDerivedArgument()
+	{
+		let doc = scope KdlDocument();
+		Test.Assert(doc.Read("n 1 2 3") case .Ok);
+		let node = doc.Root.Find("n");
+		let target = scope HeadDerived();
+		Test.Assert(target.KdlRead(node) case .Ok);
+		Test.Assert(target.Head == 1 && target.Rest.Count == 2 && target.Rest[0] == 2 && target.Rest[1] == 3);
+		target.Head = 10;
+		target.Rest.Clear();
+		target.Rest.Add(20);
+		target.Rest.Add(30);
+		Test.Assert(target.KdlWrite(node) case .Ok);
+		Test.Assert(doc.Write(.. scope .()) == "n 10 20 30\n", doc.Write(.. scope .()));
+	}
+
+	[Test]
+	public static void F4_IntegerKeysAtTheirLimits()
+	{
+		let keys = scope IntegerKeys();
+		keys.Signed = new .() { (int64.MinValue, 1), (int64.MaxValue, 2), (0, 3) };
+		keys.Unsigned = new .() { (uint64.MaxValue, 4), (0, 5) };
+		keys.Small = new .() { (-128, 6), (127, 7) };
+		keys.Medium = new .() { (uint32.MaxValue, 8) };
+		let text = scope String();
+		Test.Assert(KdlSerializer.Write(keys, text) case .Ok);
+		let back = scope IntegerKeys();
+		if (KdlSerializer.Read(text, back) case .Err(let error))
+			Test.Assert(false, scope $"{error}\n{text}");
+		Test.Assert(back.Signed[int64.MinValue] == 1 && back.Signed[int64.MaxValue] == 2 && back.Signed[0] == 3);
+		Test.Assert(back.Unsigned[uint64.MaxValue] == 4 && back.Unsigned[0] == 5);
+		Test.Assert(back.Small[-128] == 6 && back.Small[127] == 7 && back.Medium[uint32.MaxValue] == 8);
+
+		// Out of each type's range: located errors
+		for (let bad in StringView[]("small { \"128\" 1 }", "small { \"-129\" 1 }", "medium { \"4294967296\" 1 }", "medium { \"-1\" 1 }",
+			"unsigned { \"-1\" 1 }", "unsigned { \"18446744073709551616\" 1 }", "signed { \"9223372036854775808\" 1 }", "signed { \"-9223372036854775809\" 1 }"))
+		{
+			let target = scope IntegerKeys();
+			switch (KdlSerializer.Read(bad, target))
+			{
+			case .Ok: Test.Assert(false, scope $"`{bad}` should be out of range");
+			case .Err(let rangeError): Test.Assert(rangeError.mKind == .InvalidValue && rangeError.mLine == 1, scope $"`{bad}`: {rangeError}");
+			}
+		}
+	}
+
+	[Test]
+	public static void F5_TokenLimitsBelowFour()
+	{
+		// A token at the end of the input: within the limit when it fills it exactly
+		for (let buffer in int[](16, 1024))
+		{
+			for (let chunk in int[](1, 4096))
+			{
+				Test.Assert(!ReadsWithin("abc", buffer, chunk, 1) && !ReadsWithin("abc", buffer, chunk, 2), scope $"buffer {buffer}, chunk {chunk}");
+				Test.Assert(ReadsWithin("abc", buffer, chunk, 3) && ReadsWithin("abc", buffer, chunk, 4));
+				// With more after it the lookahead counts: `abc` then a newline is 4 bytes held
+				Test.Assert(!ReadsWithin("abc\n", buffer, chunk, 3) && ReadsWithin("abc\n", buffer, chunk, 4));
+				Test.Assert(!ReadsWithin("a\nbcd\n", buffer, chunk, 3) && ReadsWithin("a\nbcd\n", buffer, chunk, 5));
+			}
 		}
 	}
 
