@@ -172,27 +172,31 @@ public struct KdlValueWriter
 /// writer looks each key up here rather than scanning the children). Used by generated code.
 public class KdlKeyIndex
 {
-	KdlNode mNode;
-	Dictionary<StringView, KdlNode> mEntries ~ delete _;
+	struct Entry
+	{
+		public KdlNode mNode;
+		/// Written this time: Finish keeps it
+		public bool mUsed;
+	}
 
+	KdlNode mNode;
+	Dictionary<StringView, Entry> mEntries ~ delete _;
+
+	/// @brief Index the entry nodes of `node`, removing all but the last of duplicate keys (the one
+	/// reading used).
+	/// @param node The dictionary's node.
 	public this(KdlNode node)
 	{
 		mNode = node;
 		mEntries = new .();
-	}
-
-	/// @brief Index the entries, removing those whose keys `dictionary` no longer has and all but the
-	/// last of duplicate keys (the one reading used).
-	/// @param dictionary The dictionary being written.
-	public void Update<TValue>(Dictionary<String, TValue> dictionary)
-	{
-		mEntries.Clear();
-		var child = mNode.LastChild;
+		var child = node.LastChild;
 		while (child.IsValid)
 		{
 			let previous = child.PreviousSibling;
 			// The name is document text (in its store), so the view outlives the removal
-			if (!dictionary.ContainsKeyAlt(child.Name) || !mEntries.TryAdd(child.Name, child))
+			Entry entry = default;
+			entry.mNode = child;
+			if (!mEntries.TryAdd(child.Name, entry))
 				child.Remove();
 			child = previous;
 		}
@@ -203,11 +207,16 @@ public class KdlKeyIndex
 	/// @return The node.
 	public KdlNode Get(StringView key)
 	{
-		if (mEntries.TryGetValue(key, let found))
-			return found;
-		let added = mNode.AddChild(key);
-		mEntries[added.Name] = added;
-		return added;
+		if (mEntries.TryGetRef(key, ?, let entry))
+		{
+			entry.mUsed = true;
+			return entry.mNode;
+		}
+		Entry added = default;
+		added.mNode = mNode.AddChild(key);
+		added.mUsed = true;
+		mEntries[added.mNode.Name] = added;
+		return added.mNode;
 	}
 
 	/// @brief Where a scalar value for `key` goes: the entry node's argument, the node made when it is
@@ -216,8 +225,23 @@ public class KdlKeyIndex
 	/// @return The writer.
 	public KdlValueWriter Value(StringView key)
 	{
-		mEntries.TryGetValue(key, var found);
+		KdlNode found = default;
+		if (mEntries.TryGetRef(key, ?, let entry))
+		{
+			entry.mUsed = true;
+			found = entry.mNode;
+		}
 		return KdlValueWriter.KeyedChild(mNode, key, found);
+	}
+
+	/// @brief Remove the entry nodes no key was written to (keys the dictionary no longer has).
+	public void Finish()
+	{
+		for (let entry in mEntries.Values)
+		{
+			if (!entry.mUsed)
+				entry.mNode.Remove();
+		}
 	}
 }
 
@@ -618,6 +642,50 @@ public static class KdlBind
 			return false;
 		value = Ref(entry, index, entry.Name);
 		return true;
+	}
+
+	/// @brief A dictionary entry's name as an integer key (decimal, with an optional sign) within
+	/// [min, max].
+	/// @param entry The entry node.
+	/// @param min The key type's smallest value.
+	/// @param max The key type's largest value.
+	/// @return The key, or an error located at the entry.
+	public static Result<int64, KdlParseError> IntegerKey(KdlNode entry, int64 min, int64 max)
+	{
+		StringView name = entry.Name;
+		StringView digits = name;
+		bool negative = false;
+		if (digits.StartsWith('-') || digits.StartsWith('+'))
+		{
+			negative = digits[0] == '-';
+			digits = digits.Substring(1);
+		}
+		int64 magnitude = 0;
+		bool valid = !digits.IsEmpty;
+		for (let c in digits)
+		{
+			if (c < '0' || c > '9' || magnitude > (int64.MaxValue - (c - '0')) / 10)
+			{
+				valid = false;
+				break;
+			}
+			magnitude = magnitude * 10 + (c - '0');
+		}
+		if (!valid)
+			return .Err(MakeError(entry, -1, default, scope $"the key `{name}` is not an integer", .InvalidValue));
+		int64 key = negative ? -magnitude : magnitude;
+		if (key < min || key > max)
+			return .Err(MakeError(entry, -1, default, scope $"the key {key} is outside the range {min} to {max}", .InvalidValue));
+		return key;
+	}
+
+	/// @brief The error for a dictionary entry whose name is no case of its enum key type.
+	/// @param entry The entry node.
+	/// @param cases The accepted names, "a, b, c".
+	/// @return The error.
+	public static KdlParseError UnknownKey(KdlNode entry, StringView cases)
+	{
+		return MakeError(entry, -1, default, scope $"the key `{entry.Name}` is not one of {cases}", .InvalidValue);
 	}
 
 	/// @brief The number of child nodes named `name`.

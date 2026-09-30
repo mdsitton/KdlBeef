@@ -378,19 +378,29 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   by node name to the concrete `[KdlObject]` types assignable to T found through
   `Type.TypeDeclarations`, and written through `as IKdlSerializable` so each item's own type decides.
   Names are kebab-case by default (`KdlNaming`), enum cases too.
-- **Dictionaries.** A `Dictionary<String, T>` field is a child node named after the field whose
-  children are the entries, each named by its key exactly as written (no naming policy): `key value`
-  for a scalar T (`key #null` is skipped), the object's node for a `[KdlObject]` T, `key 1 2 3` for
-  a `List<scalar>`, and `key { item …; item … }` for a `List<[KdlObject]>`. Children rather than
-  properties, so every value type, annotations and any key fit one shape. Reading replaces the
-  contents (deleting owned keys and values on a heap read), adds each entry through `TryAddAlt` (the
-  key String is allocated only for a new key; a duplicate key's old value is deleted, so the last one
-  wins) and reads the value in place through the value pointer. Writing works in place:
-  entry nodes whose keys are gone are dropped (and all but the last duplicate), kept
-  entries are rewritten where they are (comments and number bases stay), new keys are appended in
-  the dictionary's iteration order. `KdlKeyIndex` does the removal and indexes the kept entry nodes
-  by key in one pass, so writing is linear (64,000 keys in about 7 ms). Other key types, dictionaries of dictionaries and of lists of
-  lists stop the build.
+- **Containers as content.** A `Dictionary` field, and a `List` of Lists or Dictionaries, is a child
+  node named after the field with the container as its *content*, one recursive rule to any depth
+  (`EmitReadContent`/`EmitWriteContent`):
+  - `List<scalar>`: the node's arguments (`tags a b`); `List<[KdlObject]>`: its children named after
+    the item type; `List<List or Dictionary>`: its `-` children, one per item (JSON-in-KDL's
+    convention: `matrix { - 1 2; - 3 }`);
+  - `Dictionary<K, V>`: one child per entry, named by the key: a String as written (no naming
+    policy), an integer in decimal (`"1" one`), an enum case by its name; a scalar V is the entry's
+    argument (`key value`, `key #null` skipped), a `[KdlObject]` V the entry node itself, a container V
+    its content (`sections { db { host x } }`).
+
+  Children rather than properties, so every value type, annotations and any key fit one shape.
+  Reading replaces the contents (deleting what they own, recursively, on a heap read), adds each item
+  or entry before reading it (String keys through `TryAddAlt`, allocated only when new; a repeated
+  key's old value is deleted, so the last one wins) and reads it in place. Writing works in place:
+  list items reuse the existing arguments or children by position (`KdlArgumentCursor`,
+  `KdlChildCursor`), dictionary entries by key (`KdlKeyIndex`, which indexes the entry nodes once,
+  drops all but the last duplicate, and at `Finish` removes the keys the dictionary no longer has);
+  kept entries keep their comments and number forms, new keys are appended in the dictionary's
+  iteration order, leftovers are removed. Linear (64,000 keys write in about 7 ms). A null item is
+  skipped, a null dictionary value removes its entry. `[KdlUseConverter]` on a container field
+  applies to the scalars at its leaves. Dictionary keys of other types (floats, bools, objects) stop
+  the build.
 - **Whole documents** go through `KdlDocument.Root`, a valid handle for the document itself (no
   name or entries; its children are the top-level nodes). There, properties are `name value`
   children (`KdlBind` and `KdlValueWriter` redirect), so a config file reads `version 2`.

@@ -48,8 +48,9 @@ public static class KdlSerializerCodeGen
 		ChildObjects,
 		/// A List<T>: every unclaimed child, read as the [KdlObject] type named after it ([KdlChildren]).
 		Children,
-		/// A Dictionary<String, T>: a child node whose children are the entries, named by their keys.
-		ChildDictionary
+		/// A Dictionary, or a List of Lists or Dictionaries: a child node with the container as its content
+		/// (EmitReadContent).
+		ChildContent
 	}
 
 	/// @brief Emit IKdlSerializable into `type`.
@@ -129,12 +130,9 @@ public static class KdlSerializerCodeGen
 			case .Children:
 				EmitReadChildren(read, ownerName, fieldName, plan.mType, plan.mElement, claimedExpr);
 				EmitWriteChildren(write, fieldName, plan.mElement, claimedExpr);
-			case .ChildDictionary:
-				let elementName = (plan.mValueKind == .List && plan.mElementKind == .Object) ? AppendLiteral(.. scope .(), NodeName(plan.mElement, .. scope .())) : "";
-				EmitReadDictionary(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mType, plan.mValueType, plan.mValueKind, plan.mValueConverter,
-					plan.mElement, plan.mElementKind, plan.mElementConverter, elementName, naming);
-				EmitWriteDictionary(write, fieldName, plan.mKey, plan.mAliases, plan.mValueType, plan.mValueKind, plan.mValueConverter,
-					plan.mElement, plan.mElementKind, plan.mElementConverter, elementName, naming);
+			case .ChildContent:
+				EmitReadContentField(read, fieldName, plan.mKey, plan.mAliases, plan.mRequired, plan.mType, plan.mUseConverter, naming);
+				EmitWriteContentField(write, fieldName, plan.mKey, plan.mAliases, plan.mType, plan.mUseConverter, naming);
 			}
 		}
 
@@ -146,8 +144,7 @@ public static class KdlSerializerCodeGen
 		Compiler.EmitTypeBody(type, write);
 	}
 
-	/// How one field maps: what Emit writes code from. For a dictionary, mValue* describe its values; for
-	/// a List field, or a dictionary of Lists, mElement* the items.
+	/// How one field maps: what Emit writes code from. For a List field, mElement* describe its items.
 	class FieldPlan
 	{
 		public FieldInfo mField;
@@ -161,9 +158,8 @@ public static class KdlSerializerCodeGen
 		public Type mType;
 		public Kind mKind;
 		public Type mConverter;
-		public Type mValueType;
-		public Kind mValueKind;
-		public Type mValueConverter;
+		/// [KdlUseConverter]'s converter, for the scalars inside a container field (null: none).
+		public Type mUseConverter;
 		public Type mElement;
 		public Kind mElementKind;
 		public Type mElementConverter;
@@ -192,42 +188,21 @@ public static class KdlSerializerCodeGen
 		plan.mType = fieldType;
 		Type converter = null;
 		Kind kind;
+		// [KdlUseConverter] converts the field, or in a container the scalars at its leaves
+		Type useConverter = null;
 		if (field.GetCustomAttribute<KdlUseConverterAttribute>() case .Ok(let use))
-		{
-			converter = use.mConverter;
-			kind = (DictionaryValue(fieldType) != null) ? .Dictionary : (ListElement(fieldType) != null) ? .List : .Converter;
-		}
-		else
-			kind = Classify(fieldType, out converter);
+			useConverter = use.mConverter;
+		plan.mUseConverter = useConverter;
+		kind = LeafKind(fieldType, useConverter, out converter);
 		plan.mKind = kind;
 		plan.mConverter = converter;
-		// A dictionary's values take the place of the field below: their type, and for a List value its
-		// items (a [KdlUseConverter] converter applies to the values, or to a List value's items)
-		Type valueType = null;
-		var valueKind = Kind.Unsupported;
-		Type valueConverter = converter;
-		if (kind == .Dictionary)
-		{
-			valueType = DictionaryValue(fieldType);
-			if (converter != null)
-				valueKind = (ListElement(valueType) != null) ? .List : .Converter;
-			else
-				valueKind = Classify(valueType, out valueConverter);
-		}
-		plan.mValueType = valueType;
-		plan.mValueKind = valueKind;
-		plan.mValueConverter = valueConverter;
-		let listType = (kind == .Dictionary) ? valueType : fieldType;
 		Type element = null;
 		var elementKind = Kind.Unsupported;
-		Type elementConverter = (kind == .Dictionary) ? valueConverter : converter;
-		if (kind == .List || valueKind == .List)
+		Type elementConverter = null;
+		if (kind == .List)
 		{
-			element = ListElement(listType);
-			if (converter != null)
-				elementKind = .Converter;
-			else
-				elementKind = Classify(element, out elementConverter);
+			element = ListElement(fieldType);
+			elementKind = LeafKind(element, useConverter, out elementConverter);
 		}
 		plan.mElement = element;
 		plan.mElementKind = elementKind;
@@ -269,12 +244,12 @@ public static class KdlSerializerCodeGen
 			plan.mRole = .ChildArguments;
 		else if (kind == .List && elementKind == .Object)
 			plan.mRole = .ChildObjects;
-		else if (kind == .Dictionary && (IsScalar(valueKind) || valueKind == .Object || (valueKind == .List && (IsScalar(elementKind) || elementKind == .Object))))
-			plan.mRole = .ChildDictionary;
+		else if ((kind == .List || kind == .Dictionary) && IsContent(fieldType, useConverter))
+			plan.mRole = .ChildContent;
 		else
 		{
 			let typeName = fieldType.GetFullName(.. scope .());
-			Fail(ownerName, field.Name, scope $"KDL serialization does not support fields of type {typeName}. Supported: bool, integers, float, double, String, enums, [KdlObject] types, List<T> of those, Dictionary<String, T> of those (not of dictionaries or lists of lists), and types with a converter ([KdlConverter] registration or [KdlUseConverter] on the field). Mark the field [KdlIgnore] to leave it out.");
+			Fail(ownerName, field.Name, scope $"KDL serialization does not support fields of type {typeName}. Supported: bool, integers, float, double, String, enums, [KdlObject] types, and Lists and Dictionaries of those, nested to any depth, with dictionary keys of String, integer or enum types; also types with a converter ([KdlConverter] registration or [KdlUseConverter] on the field). Mark the field [KdlIgnore] to leave it out.");
 			plan.mRole = .Property;
 		}
 		return plan;
@@ -460,14 +435,26 @@ public static class KdlSerializerCodeGen
 		return kind != .Object && kind != .List && kind != .Dictionary && kind != .Unsupported;
 	}
 
-	/// The T of a Dictionary<String, T>, or null (other key types are not supported: keys are node names).
+	/// The V of a Dictionary<K, V>, or null. (Which keys work is IsKeyType's question.)
 	[Comptime]
 	static Type DictionaryValue(Type type)
 	{
 		if (let specialized = type as SpecializedGenericType)
 		{
-			if (specialized.UnspecializedType == typeof(Dictionary<,>) && specialized.GetGenericArg(0) == typeof(String))
+			if (specialized.UnspecializedType == typeof(Dictionary<,>))
 				return specialized.GetGenericArg(1);
+		}
+		return null;
+	}
+
+	/// The K of a Dictionary<K, V>, or null.
+	[Comptime]
+	static Type DictionaryKey(Type type)
+	{
+		if (let specialized = type as SpecializedGenericType)
+		{
+			if (specialized.UnspecializedType == typeof(Dictionary<,>))
+				return specialized.GetGenericArg(0);
 		}
 		return null;
 	}
@@ -957,118 +944,349 @@ public static class KdlSerializerCodeGen
 		return code;
 	}
 
-	/// Appends the deletion of an owned value `expr` of `type` (a dictionary value being replaced): Strings,
-	/// class objects and lists are deleted, a list's object items first; value types need nothing.
+	/// Appends the deletion of an owned value `expr` of `type` (a container's item or value being
+	/// replaced): Strings and class objects are deleted, containers with what they own (String keys,
+	/// reference-type items and values, recursively); value types need nothing. `depth` keeps the loop
+	/// variables of nested containers apart.
 	[Comptime]
-	static void EmitDeleteValue(String code, StringView indent, StringView expr, Type type, Kind kind)
+	static void EmitDeleteOwned(String code, StringView indent, StringView expr, Type type, int depth)
 	{
 		if (type.IsValueType)
 			return;
-		if (kind == .List && !ListElement(type).IsValueType)
-			code.AppendF("{0}for (let _item in {1})\n{0}\tdelete _item;\n", indent, expr);
-		code.AppendF("{}delete {};\n", indent, expr);
+		if (let element = ListElement(type))
+		{
+			if (!element.IsValueType)
+			{
+				code.AppendF("{0}for (let _x{1} in ({2}))\n{0}{{\n", indent, depth, expr);
+				EmitDeleteOwned(code, scope $"{indent}\t", scope $"_x{depth}", element, depth + 1);
+				code.AppendF("{}}}\n", indent);
+			}
+		}
+		else if (let value = DictionaryValue(type))
+		{
+			bool ownsKeys = DictionaryKey(type) == typeof(String);
+			if (ownsKeys || !value.IsValueType)
+			{
+				code.AppendF("{0}for (let _x{1} in ({2}))\n{0}{{\n", indent, depth, expr);
+				if (ownsKeys)
+					code.AppendF("{}\tdelete _x{}.key;\n", indent, depth);
+				EmitDeleteOwned(code, scope $"{indent}\t", scope $"_x{depth}.value", value, depth + 1);
+				code.AppendF("{}}}\n", indent);
+			}
+		}
+		code.AppendF("{}delete ({});\n", indent, expr);
 	}
 
-	/// A Dictionary<String, T> field: the child node `key`, one child per entry named by its key. Reading
-	/// replaces the dictionary's contents (the last of duplicate keys wins); each entry is added first, so
-	/// the dictionary owns it if reading its value fails, then read in place through the value pointer.
+	/// Whether `type` is a List or Dictionary.
 	[Comptime]
-	static void EmitReadDictionary(String code, StringView name, StringView key, List<String> aliases, bool required, Type dictionaryType, Type valueType, Kind valueKind,
-		Type valueConverter, Type element, Kind elementKind, Type elementConverter, StringView elementName, KdlNaming naming)
+	static bool IsContainer(Type type)
+	{
+		return ListElement(type) != null || DictionaryValue(type) != null;
+	}
+
+	/// Whether a dictionary's keys can be node names: String, integers (written in decimal) and simple
+	/// enums (their case names).
+	[Comptime]
+	static bool IsKeyType(Type type)
+	{
+		if (type == typeof(String))
+			return true;
+		if (type == typeof(char8) || type == typeof(char16) || type == typeof(char32) || type == typeof(bool))
+			return false;
+		return type.IsInteger || (type.IsEnum && !type.IsUnion);
+	}
+
+	/// Whether `type` can be a List's item or a Dictionary's value: a scalar, a [KdlObject], or a
+	/// container of those (recursively). A [KdlUseConverter] converter makes any non-container a scalar.
+	[Comptime]
+	static bool IsSupportedItem(Type type, Type useConverter)
+	{
+		if (IsContainer(type))
+			return IsContent(type, useConverter);
+		if (useConverter != null)
+			return true;
+		let kind = Classify(type, ?);
+		return IsScalar(kind) || kind == .Object;
+	}
+
+	/// Whether a List or Dictionary type can be mapped as a node's content (see EmitReadContent).
+	[Comptime]
+	static bool IsContent(Type type, Type useConverter)
+	{
+		if (let element = ListElement(type))
+			return IsSupportedItem(element, useConverter);
+		if (let value = DictionaryValue(type))
+			return IsKeyType(DictionaryKey(type)) && IsSupportedItem(value, useConverter);
+		return false;
+	}
+
+	/// The kind and converter of a scalar leaf: the [KdlUseConverter] one when given, else as classified.
+	[Comptime]
+	static Kind LeafKind(Type type, Type useConverter, out Type converter)
+	{
+		if (useConverter != null && !IsContainer(type))
+		{
+			converter = useConverter;
+			return .Converter;
+		}
+		return Classify(type, out converter);
+	}
+
+	/// A field whose type is a Dictionary, or a List of Lists or Dictionaries: the child node `key`, read
+	/// as content (EmitReadContent).
+	[Comptime]
+	static void EmitReadContentField(String code, StringView name, StringView key, List<String> aliases, bool required, Type type, Type useConverter, KdlNaming naming)
 	{
 		StringView req = required ? "true" : "false";
 		code.AppendF("\t{{\n\t\tKdlBeef.KdlNode _dn;\n\t\tbool _found = Try!(KdlBeef.KdlBind.FindChild(_node, {}, {}, out _dn));\n", key, aliases.IsEmpty ? req : "false");
 		for (int a < aliases.Count)
 			code.AppendF("\t\tif (!_found)\n\t\t\t_found = Try!(KdlBeef.KdlBind.FindChild(_node, {}, {}, out _dn));\n", aliases[a], (a == aliases.Count - 1) ? req : "false");
-		code.AppendF("\t\tif (_found)\n\t\t{{\n\t\t\tif (this.{0} == null)\n\t\t\t\tthis.{0} = {1};\n\t\t\telse\n\t\t\t{{\n", name, NewExpr(dictionaryType.GetFullName(.. scope .()), "", .. scope .()));
-		// The dictionary owns its keys and values; with an allocator, the allocator does
-		code.AppendF("\t\t\t\tif (_alloc == null)\n\t\t\t\t{{\n\t\t\t\t\tfor (let _old in this.{})\n\t\t\t\t\t{{\n\t\t\t\t\t\tdelete _old.key;\n", name);
-		EmitDeleteValue(code, "\t\t\t\t\t\t", "_old.value", valueType, valueKind);
-		code.AppendF("\t\t\t\t\t}}\n\t\t\t\t}}\n\t\t\t\tthis.{}.Clear();\n\t\t\t}}\n", name);
+		code.Append("\t\tif (_found)\n\t\t{\n");
+		EmitReadContent(code, "\t\t\t", "_dn", scope $"this.{name}", type, useConverter, naming, 1);
+		code.Append("\t\t}\n\t}\n");
+	}
 
-		code.Append("\t\t\tfor (let _de in _dn.Children)\n\t\t\t{\n");
-		// A scalar entry is `key value`; `key #null` is skipped, like an absent property
-		if (IsScalar(valueKind))
-			code.Append("\t\t\t\tKdlBeef.KdlValueRef _r;\n\t\t\t\tif (!Try!(KdlBeef.KdlBind.EntryValue(_de, out _r)))\n\t\t\t\t\tcontinue;\n");
-		code.AppendF("\t\t\t\tif (this.{}.TryAddAlt(_de.Name, let _dk, let _dv))\n\t\t\t\t\t*_dk = {};\n", name, NewExpr("String", "_de.Name", .. scope .()));
-		let deleteOld = EmitDeleteValue(.. scope .(), "\t\t\t\t\t", "*_dv", valueType, valueKind);
-		if (!deleteOld.IsEmpty)
-			code.AppendF("\t\t\t\telse if (_alloc == null)\n\t\t\t\t{{\n{}\t\t\t\t}}\n", deleteOld);
-		let valueTypeName = valueType.GetFullName(.. scope .());
-		code.AppendF("\t\t\t\t*_dv = {};\n", (valueKind == .Object && valueType.IsValueType) ? ".()" : "default");
-
-		switch (valueKind)
+	/// Reads the node `node` as the content of a List or Dictionary `type` into `target` (an lvalue), which
+	/// is created when null and otherwise emptied first (its owned items deleted on a heap read):
+	/// - List<scalar>: the node's arguments (`tags a b`);
+	/// - List<[KdlObject]>: its children named after the item type;
+	/// - List<List or Dictionary>: its children named `-`, each an item's content (`- 1 2`);
+	/// - Dictionary<K, V>: its children, one per entry, named by the key (a String as written, an
+	///   integer in decimal, an enum case by name): a scalar V is the entry's argument (`key value`,
+	///   `key #null` skipped), a [KdlObject] V the entry node itself, a container V its content. The
+	///   last of duplicate keys wins.
+	/// Items are added before they are read, so the container owns them if reading fails. `depth` keeps
+	/// the locals of nested levels apart.
+	[Comptime]
+	static void EmitReadContent(String code, StringView indent, StringView node, StringView target, Type type, Type useConverter, KdlNaming naming, int depth)
+	{
+		StringView i = indent;
+		let inner = scope String(indent)..Append('\t');
+		let typeName = type.GetFullName(.. scope .());
+		// Created, or emptied of what it owned
+		code.AppendF("{0}if ({1} == null)\n{0}\t{1} = {2};\n{0}else\n{0}{{\n", i, target, NewExpr(typeName, "", .. scope .()));
+		let deleteOwned = scope String();
+		if (let element = ListElement(type))
 		{
-		case .Object:
-			if (!valueType.IsValueType)
-				code.AppendF("\t\t\t\t*_dv = {};\n", NewExpr(valueTypeName, "", .. scope .()));
-			code.Append("\t\t\t\tTry!((*_dv).KdlRead(_de, _alloc));\n");
-		case .List:
-			code.AppendF("\t\t\t\t*_dv = {};\n", NewExpr(valueTypeName, "", .. scope .()));
-			if (elementKind == .Object)
+			if (!element.IsValueType)
 			{
-				// `key { item …; item … }`: the entry's children named after the item type
-				let typeName = element.GetFullName(.. scope .());
-				code.AppendF("\t\t\t\tfor (let _c in _de.Children)\n\t\t\t\t{{\n\t\t\t\t\tif (_c.Name != {})\n\t\t\t\t\t\tcontinue;\n", elementName);
+				deleteOwned.AppendF("{0}\t\tfor (let _o{1} in {2})\n{0}\t\t{{\n", i, depth, target);
+				EmitDeleteOwned(deleteOwned, scope $"{i}\t\t\t", scope $"_o{depth}", element, depth + 1);
+				deleteOwned.AppendF("{}\t\t}}\n", i);
+			}
+		}
+		else
+		{
+			bool ownsKeys = DictionaryKey(type) == typeof(String);
+			let value = DictionaryValue(type);
+			if (ownsKeys || !value.IsValueType)
+			{
+				deleteOwned.AppendF("{0}\t\tfor (let _o{1} in {2})\n{0}\t\t{{\n", i, depth, target);
+				if (ownsKeys)
+					deleteOwned.AppendF("{}\t\t\tdelete _o{}.key;\n", i, depth);
+				EmitDeleteOwned(deleteOwned, scope $"{i}\t\t\t", scope $"_o{depth}.value", value, depth + 1);
+				deleteOwned.AppendF("{}\t\t}}\n", i);
+			}
+		}
+		if (!deleteOwned.IsEmpty)
+			code.AppendF("{0}\tif (_alloc == null)\n{0}\t{{\n{1}{0}\t}}\n", i, deleteOwned);
+		code.AppendF("{0}\t{1}.Clear();\n{0}}}\n", i, target);
+
+		if (let element = ListElement(type))
+		{
+			code.AppendF("{}let _l{} = {};\n", i, depth, target);
+			let elementKind = LeafKind(element, useConverter, let elementConverter);
+			if (IsContainer(element))
+			{
+				// `- …` children, each an item
+				code.AppendF("{0}for (let _c{1} in {2}.Children)\n{0}{{\n{0}\tif (_c{1}.Name != \"-\")\n{0}\t\tcontinue;\n{0}\t_l{1}.Add(default);\n", i, depth, node);
+				EmitReadContent(code, inner, scope $"_c{depth}", scope $"_l{depth}[_l{depth}.Count - 1]", element, useConverter, naming, depth + 1);
+				code.AppendF("{}}}\n", i);
+			}
+			else if (elementKind == .Object)
+			{
+				let elementName = AppendLiteral(.. scope .(), NodeName(element, .. scope .()));
+				let elementTypeName = element.GetFullName(.. scope .());
+				code.AppendF("{0}for (let _c{1} in {2}.Children)\n{0}{{\n{0}\tif (_c{1}.Name != {3})\n{0}\t\tcontinue;\n", i, depth, node, elementName);
 				if (element.IsValueType)
-					code.AppendF("\t\t\t\t\t{0} _o = .();\n\t\t\t\t\tTry!(_o.KdlRead(_c, _alloc));\n\t\t\t\t\t(*_dv).Add(_o);\n", typeName);
+					code.AppendF("{0}\t{1} _o{2} = .();\n{0}\tTry!(_o{2}.KdlRead(_c{2}, _alloc));\n{0}\t_l{2}.Add(_o{2});\n", i, elementTypeName, depth);
 				else
-					code.AppendF("\t\t\t\t\tlet _o = {0};\n\t\t\t\t\t(*_dv).Add(_o);\n\t\t\t\t\tTry!(_o.KdlRead(_c, _alloc));\n", NewExpr(typeName, "", .. scope .()));
-				code.Append("\t\t\t\t}\n");
+					code.AppendF("{0}\tlet _o{1} = {2};\n{0}\t_l{1}.Add(_o{1});\n{0}\tTry!(_o{1}.KdlRead(_c{1}, _alloc));\n", i, depth, NewExpr(elementTypeName, "", .. scope .()));
+				code.AppendF("{}}}\n", i);
 			}
 			else
 			{
-				// `key 1 2 3`: the entry's arguments
-				code.Append("\t\t\t\tfor (let _r in KdlBeef.KdlBind.Arguments(_de, 0))\n\t\t\t\t{\n");
-				EmitConvert(code, "\t\t\t\t\t", "(*_dv)", true, element, elementKind, elementConverter, naming);
-				code.Append("\t\t\t\t}\n");
+				// The arguments
+				code.AppendF("{0}for (let _r in KdlBeef.KdlBind.Arguments({1}, 0))\n{0}{{\n", i, node);
+				EmitConvert(code, inner, scope $"_l{depth}", true, element, elementKind, elementConverter, naming);
+				code.AppendF("{}}}\n", i);
 			}
-		default:
-			EmitConvert(code, "\t\t\t\t", "(*_dv)", false, valueType, valueKind, valueConverter, naming);
+			return;
 		}
-		code.Append("\t\t\t}\n\t\t}\n\t}\n");
+
+		// A Dictionary
+		let keyType = DictionaryKey(type);
+		let value = DictionaryValue(type);
+		let valueKind = LeafKind(value, useConverter, let valueConverter);
+		bool scalarValue = !IsContainer(value) && valueKind != .Object;
+		code.AppendF("{0}let _m{1} = {2};\n{0}for (let _e{1} in {3}.Children)\n{0}{{\n", i, depth, target, node);
+		// A scalar entry is `key value`; `key #null` is skipped, like an absent property
+		if (scalarValue)
+			code.AppendF("{0}KdlBeef.KdlValueRef _r;\n{0}if (!Try!(KdlBeef.KdlBind.EntryValue(_e{1}, out _r)))\n{0}\tcontinue;\n", inner, depth);
+		if (keyType == typeof(String))
+			code.AppendF("{0}if (_m{1}.TryAddAlt(_e{1}.Name, let _kp{1}, let _vp{1}))\n{0}\t*_kp{1} = {2};\n", inner, depth, NewExpr("String", scope $"_e{depth}.Name", .. scope .()));
+		else
+		{
+			EmitReadKey(code, inner, scope $"_e{depth}", scope $"_key{depth}", keyType, naming);
+			code.AppendF("{0}if (_m{1}.TryAdd(_key{1}, let _kp{1}, let _vp{1}))\n{0}\t*_kp{1} = _key{1};\n", inner, depth);
+		}
+		// A repeated key: the last one wins, the earlier value goes
+		let deleteOld = EmitDeleteOwned(.. scope .(), scope $"{inner}\t", scope $"*_vp{depth}", value, depth + 1);
+		if (!deleteOld.IsEmpty)
+			code.AppendF("{0}else if (_alloc == null)\n{0}{{\n{1}{0}}}\n", inner, deleteOld);
+		code.AppendF("{}*_vp{} = {};\n", inner, depth, (valueKind == .Object && value.IsValueType) ? ".()" : "default");
+		let slot = scope $"(*_vp{depth})";
+		if (IsContainer(value))
+			EmitReadContent(code, inner, scope $"_e{depth}", slot, value, useConverter, naming, depth + 1);
+		else if (valueKind == .Object)
+		{
+			if (!value.IsValueType)
+				code.AppendF("{}{} = {};\n", inner, slot, NewExpr(value.GetFullName(.. scope .()), "", .. scope .()));
+			code.AppendF("{}Try!({}.KdlRead(_e{}, _alloc));\n", inner, slot, depth);
+		}
+		else
+			EmitConvert(code, inner, slot, false, value, valueKind, valueConverter, naming);
+		code.AppendF("{}}}\n", i);
 	}
 
-	/// Writes a Dictionary<String, T> field into its child node in place: entries that stay keep their
-	/// position and comments, keys the dictionary no longer has are removed, new keys are appended.
-	/// Linear: the entry nodes are indexed by key once (KdlKeyIndex).
+	/// Converts an entry node's name into a non-String dictionary key `variable` of `keyType` (an integer
+	/// in decimal, or an enum case name), or returns a located error.
 	[Comptime]
-	static void EmitWriteDictionary(String code, StringView name, StringView key, List<String> aliases, Type valueType, Kind valueKind, Type valueConverter,
-		Type element, Kind elementKind, Type elementConverter, StringView elementName, KdlNaming naming)
+	static void EmitReadKey(String code, StringView indent, StringView entry, StringView variable, Type keyType, KdlNaming naming)
+	{
+		let keyTypeName = keyType.GetFullName(.. scope .());
+		if (keyType.IsEnum)
+		{
+			let cases = CaseList(keyType, naming, .. scope .());
+			code.AppendF("{0}{1} {2};\n{0}switch ({3}.Name)\n{0}{{\n", indent, keyTypeName, variable, entry);
+			for (let field in keyType.GetFields())
+			{
+				if (!field.IsEnumCase)
+					continue;
+				code.AppendF("{}case ", indent);
+				AppendLiteral(code, ApplyNaming(field.Name, naming, .. scope .()));
+				code.AppendF(": {} = .{};\n", variable, field.Name);
+			}
+			code.AppendF("{0}default: return .Err(KdlBeef.KdlBind.UnknownKey({1}, \"{2}\"));\n{0}}}\n", indent, entry, cases);
+			return;
+		}
+		let min = scope String();
+		let max = scope String();
+		if (IsUInt64(keyType))
+		{
+			// Keys above int64.MaxValue are not supported: the name is read as an int64
+			min.Append("0");
+			max.Append("int64.MaxValue");
+		}
+		else
+			IntegerRange(keyType, min, max);
+		code.AppendF("{}let {} = ({})Try!(KdlBeef.KdlBind.IntegerKey({}, {}, {}));\n", indent, variable, keyTypeName, entry, min, max);
+	}
+
+	/// Writes a content field (see EmitReadContentField) into its child node, which a null field removes.
+	[Comptime]
+	static void EmitWriteContentField(String code, StringView name, StringView key, List<String> aliases, Type type, Type useConverter, KdlNaming naming)
 	{
 		for (let alias in aliases)
 			code.AppendF("\tKdlBeef.KdlBind.RenameChildAlias(_node, {}, {});\n", key, alias);
-		code.AppendF("\tif (this.{0} == null)\n\t\tKdlBeef.KdlBind.RemoveChild(_node, {1});\n\telse\n\t{{\n", name, key);
-		// The entries by key, found once (gone keys removed), so each key's node is a lookup
-		code.AppendF("\t\tlet _index = scope KdlBeef.KdlKeyIndex(KdlBeef.KdlBind.ChildNode(_node, {0}));\n\t\t_index.Update(this.{1});\n\t\tfor (let _kv in this.{1})\n\t\t{{\n", key, name);
-		switch (valueKind)
+		code.AppendF("\tif (this.{0} == null)\n\t\tKdlBeef.KdlBind.RemoveChild(_node, {1});\n\telse\n\t{{\n\t\tlet _dn = KdlBeef.KdlBind.ChildNode(_node, {1});\n", name, key);
+		EmitWriteContent(code, "\t\t", "_dn", scope $"this.{name}", type, useConverter, naming, 1);
+		code.Append("\t}\n");
+	}
+
+	/// Writes `source` (a non-null List or Dictionary) as the content of `node` (see EmitReadContent), in
+	/// place: items reuse the existing arguments or children by position (list) or key (dictionary, whose
+	/// entry nodes are indexed once, KdlKeyIndex), so comments and number forms stay; what is left over is
+	/// removed. A null item is skipped; a null dictionary value removes its entry.
+	[Comptime]
+	static void EmitWriteContent(String code, StringView indent, StringView node, StringView source, Type type, Type useConverter, KdlNaming naming, int depth)
+	{
+		StringView i = indent;
+		let inner = scope String(indent)..Append('\t');
+		if (let element = ListElement(type))
 		{
-		case .Object:
-			if (valueType.IsValueType)
-				code.Append("\t\t\tTry!(_kv.value.KdlWrite(_index.Get(_kv.key)));\n");
-			else
-				code.Append("\t\t\tif (_kv.value == null)\n\t\t\t\t_index.Value(_kv.key).Remove();\n\t\t\telse\n\t\t\t\tTry!(_kv.value.KdlWrite(_index.Get(_kv.key)));\n");
-		case .List:
-			code.Append("\t\t\tif (_kv.value == null)\n\t\t\t{\n\t\t\t\t_index.Value(_kv.key).Remove();\n\t\t\t\tcontinue;\n\t\t\t}\n");
-			code.Append("\t\t\tlet _de = _index.Get(_kv.key);\n");
-			if (elementKind == .Object)
+			code.AppendF("{}let _l{} = {};\n", i, depth, source);
+			let elementKind = LeafKind(element, useConverter, let elementConverter);
+			if (IsContainer(element))
 			{
-				code.AppendF("\t\t\tvar _cc = KdlBeef.KdlChildCursor(_de, {});\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{{\n", elementName);
+				code.AppendF("{0}var _cc{1} = KdlBeef.KdlChildCursor({2}, \"-\");\n{0}for (let _x{1} in _l{1})\n{0}{{\n{0}\tif (_x{1} == null)\n{0}\t\tcontinue;\n{0}\tlet _cn{1} = _cc{1}.Next();\n", i, depth, node);
+				EmitWriteContent(code, inner, scope $"_cn{depth}", scope $"_x{depth}", element, useConverter, naming, depth + 1);
+				code.AppendF("{0}}}\n{0}_cc{1}.Trim();\n", i, depth);
+			}
+			else if (elementKind == .Object)
+			{
+				let elementName = AppendLiteral(.. scope .(), NodeName(element, .. scope .()));
+				code.AppendF("{0}var _cc{1} = KdlBeef.KdlChildCursor({2}, {3});\n{0}for (let _x{1} in _l{1})\n{0}{{\n", i, depth, node, elementName);
 				if (!element.IsValueType)
-					code.Append("\t\t\t\tif (_e == null)\n\t\t\t\t\tcontinue;\n");
-				code.Append("\t\t\t\tTry!(_e.KdlWrite(_cc.Next()));\n\t\t\t}\n\t\t\t_cc.Trim();\n");
+					code.AppendF("{0}\tif (_x{1} == null)\n{0}\t\tcontinue;\n", i, depth);
+				code.AppendF("{0}\tTry!(_x{1}.KdlWrite(_cc{1}.Next()));\n{0}}}\n{0}_cc{1}.Trim();\n", i, depth);
 			}
 			else
 			{
-				code.Append("\t\t\tvar _ac = KdlBeef.KdlArgumentCursor(_de, 0);\n\t\t\tfor (let _e in _kv.value)\n\t\t\t{\n\t\t\t\tlet _w = _ac.Next();\n");
-				EmitSet(code, "\t\t\t\t", "_e", element, elementKind, elementConverter, naming);
-				code.Append("\t\t\t}\n\t\t\t_ac.Trim();\n");
+				code.AppendF("{0}var _ac{1} = KdlBeef.KdlArgumentCursor({2}, 0);\n{0}for (let _e in _l{1})\n{0}{{\n{0}\tlet _w = _ac{1}.Next();\n", i, depth, node);
+				EmitSet(code, inner, "_e", element, elementKind, elementConverter, naming);
+				code.AppendF("{0}}}\n{0}_ac{1}.Trim();\n", i, depth);
 			}
-		default:
-			code.Append("\t\t\tlet _w = _index.Value(_kv.key);\n");
-			EmitSet(code, "\t\t\t", "_kv.value", valueType, valueKind, valueConverter, naming);
+			return;
 		}
-		code.Append("\t\t}\n\t}\n");
+
+		// A Dictionary: the entry nodes by key, found once; keys the dictionary no longer has go at the end
+		let keyType = DictionaryKey(type);
+		let value = DictionaryValue(type);
+		let valueKind = LeafKind(value, useConverter, let valueConverter);
+		code.AppendF("{0}let _ix{1} = scope KdlBeef.KdlKeyIndex({2});\n{0}for (let _kv{1} in {3})\n{0}{{\n", i, depth, node, source);
+		let keyName = scope String();
+		if (keyType == typeof(String))
+			keyName.AppendF("_kv{}.key", depth);
+		else if (keyType.IsEnum)
+		{
+			keyName.AppendF("_kn{}", depth);
+			code.AppendF("{0}StringView {1};\n{0}switch (_kv{2}.key)\n{0}{{\n", inner, keyName, depth);
+			for (let field in keyType.GetFields())
+			{
+				if (!field.IsEnumCase)
+					continue;
+				code.AppendF("{}case .{}: {} = ", inner, field.Name, keyName);
+				AppendLiteral(code, ApplyNaming(field.Name, naming, .. scope .()));
+				code.Append(";\n");
+			}
+			code.AppendF("{}}}\n", inner);
+		}
+		else
+		{
+			keyName.AppendF("_kn{}", depth);
+			code.AppendF("{}let {} = _kv{}.key.ToString(.. scope String());\n", inner, keyName, depth);
+		}
+		let valueExpr = scope $"_kv{depth}.value";
+		if (IsContainer(value))
+		{
+			code.AppendF("{0}if ({1} == null)\n{0}\t_ix{2}.Value({3}).Remove();\n{0}else\n{0}{{\n{0}\tlet _en{2} = _ix{2}.Get({3});\n", inner, valueExpr, depth, keyName);
+			EmitWriteContent(code, scope $"{inner}\t", scope $"_en{depth}", valueExpr, value, useConverter, naming, depth + 1);
+			code.AppendF("{}}}\n", inner);
+		}
+		else if (valueKind == .Object)
+		{
+			if (value.IsValueType)
+				code.AppendF("{}Try!({}.KdlWrite(_ix{}.Get({})));\n", inner, valueExpr, depth, keyName);
+			else
+				code.AppendF("{0}if ({1} == null)\n{0}\t_ix{2}.Value({3}).Remove();\n{0}else\n{0}\tTry!({1}.KdlWrite(_ix{2}.Get({3})));\n", inner, valueExpr, depth, keyName);
+		}
+		else
+		{
+			code.AppendF("{}let _w = _ix{}.Value({});\n", inner, depth, keyName);
+			EmitSet(code, inner, valueExpr, value, valueKind, valueConverter, naming);
+		}
+		code.AppendF("{0}}}\n{0}_ix{1}.Finish();\n", i, depth);
 	}
 
 	[Comptime]

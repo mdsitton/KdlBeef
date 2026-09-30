@@ -17,6 +17,56 @@ class FineSameName
 	[KdlChild, KdlName("color")] public int32 ColorChild;
 }
 
+/// Nested containers and non-String keys (P6)
+[KdlObject]
+class Nested
+{
+	public List<List<int32>> Matrix;
+	public List<List<Point>> Paths;
+	public List<Dictionary<String, int32>> Rows;
+	public Dictionary<String, Dictionary<String, String>> Sections;
+	public Dictionary<int32, String> ById;
+	public Dictionary<Align, int32> Widths;
+	public Dictionary<String, List<List<String>>> Groups;
+
+	public ~this()
+	{
+		if (Matrix != null)
+			DeleteContainerAndItems!(Matrix);
+		if (Paths != null)
+			DeleteContainerAndItems!(Paths);
+		if (Rows != null)
+		{
+			for (let row in Rows)
+				DeleteDictionaryAndKeys!(row);
+			delete Rows;
+		}
+		if (Sections != null)
+		{
+			for (let entry in Sections)
+			{
+				delete entry.key;
+				DeleteDictionaryAndKeysAndValues!(entry.value);
+			}
+			delete Sections;
+		}
+		if (ById != null)
+			DeleteDictionaryAndValues!(ById);
+		delete Widths;
+		if (Groups != null)
+		{
+			for (let entry in Groups)
+			{
+				delete entry.key;
+				for (let list in entry.value)
+					DeleteContainerAndItems!(list);
+				delete entry.value;
+			}
+			delete Groups;
+		}
+	}
+}
+
 [KdlObject]
 class ReviewProbe
 {
@@ -704,6 +754,111 @@ static class KdlReviewTests
 		config.MaxInputBytes = text.Length;
 		Test.Assert(doc.ReadFile(path, config) case .Ok && doc.Nodes.Count == 200);
 		Test.Assert(doc.ReadFile(path) case .Ok && doc.Nodes.Last.Name == "node199");
+	}
+
+	// Nested containers and non-String keys (P6)
+
+	const String cNested = """
+		matrix {
+		    - 1 2 3
+		    - 4
+		    -
+		}
+		paths {
+		    - { point 0 0; point 5 5 }
+		    - { point 9 9 }
+		}
+		rows {
+		    - { a 1; b 2 }
+		    - { c 3 }
+		}
+		sections {
+		    db { host "localhost"; port "5432" }
+		    cache { host "redis" }
+		}
+		by-id { "1" one; "-2" minus-two; "3" #null }
+		widths { start 10; end-aligned 30 }
+		groups {
+		    ui {
+		        - button label
+		        - slider
+		    }
+		}
+
+		""";
+
+	[Test]
+	public static void Nested_ReadWriteAndUpdate()
+	{
+		let nested = scope Nested();
+		if (KdlSerializer.Read(cNested, nested) case .Err(let error))
+			Test.Assert(false, error.ToString(.. scope .()));
+		Test.Assert(nested.Matrix.Count == 3 && nested.Matrix[0].Count == 3 && nested.Matrix[0][2] == 3 && nested.Matrix[1][0] == 4 && nested.Matrix[2].Count == 0);
+		Test.Assert(nested.Paths.Count == 2 && nested.Paths[0].Count == 2 && nested.Paths[0][1].Y == 5 && nested.Paths[1][0].X == 9);
+		Test.Assert(nested.Rows.Count == 2 && nested.Rows[0]["b"] == 2 && nested.Rows[1]["c"] == 3);
+		Test.Assert(nested.Sections.Count == 2 && nested.Sections["db"]["port"] == "5432" && nested.Sections["cache"]["host"] == "redis");
+		Test.Assert(nested.ById.Count == 2 && nested.ById[1] == "one" && nested.ById[-2] == "minus-two");
+		Test.Assert(nested.Widths.Count == 2 && nested.Widths[.Start] == 10 && nested.Widths[.EndAligned] == 30);
+		Test.Assert(nested.Groups["ui"].Count == 2 && nested.Groups["ui"][0][1] == "label" && nested.Groups["ui"][1][0] == "slider");
+
+		// Read again into the filled object (what it owned is freed), with a repeated nested key
+		Test.Assert(KdlSerializer.Read(cNested, nested) case .Ok);
+		Test.Assert(KdlSerializer.Read("sections { db { a \"1\" }; db { b \"2\" } }\ngroups { ui { - x }; ui { - y z } }", nested) case .Ok);
+		Test.Assert(nested.Sections.Count == 1 && nested.Sections["db"].Count == 1 && nested.Sections["db"]["b"] == "2");
+		Test.Assert(nested.Groups["ui"].Count == 1 && nested.Groups["ui"][0][1] == "z");
+		Test.Assert(KdlSerializer.Read(cNested, nested) case .Ok);
+
+		// Written and read back: the same values
+		let text = scope String();
+		Test.Assert(KdlSerializer.Write(nested, text) case .Ok);
+		Test.Assert(text.Contains("matrix {\n    - 1 2 3\n    - 4\n    -\n}\n"), text);
+		Test.Assert(text.Contains("by-id {\n") && text.Contains("\"1\" one") && text.Contains("\"-2\" minus-two"), text);
+		Test.Assert(text.Contains("widths {\n") && text.Contains("start 10") && text.Contains("end-aligned 30"), text);
+		let back = scope Nested();
+		if (KdlSerializer.Read(text, back) case .Err(let backError))
+			Test.Assert(false, scope $"{backError}\n{text}");
+		Test.Assert(back.Matrix[0][2] == 3 && back.Paths[0][1].Y == 5 && back.Rows[1]["c"] == 3 && back.Sections["db"]["host"] == "localhost");
+		Test.Assert(back.ById[-2] == "minus-two" && back.Widths[.EndAligned] == 30 && back.Groups["ui"][0][1] == "label");
+
+		// In place: comments stay; a shorter list, a removed key, a changed nested value
+		let doc = scope KdlDocument();
+		doc.ReadConfig.MetadataMode = .PreserveStyle;
+		Test.Assert(doc.Read("matrix {\n    // first row\n    - 1 2 3\n    - 0x10\n}\nsections {\n    db { host \"a\" } // main\n    old { x \"y\" }\n}\n") case .Ok);
+		let edited = scope Nested();
+		Test.Assert(edited.KdlRead(doc.Root) case .Ok);
+		Test.Assert(edited.Matrix[1][0] == 16);
+		edited.Matrix[1][0] = 32;
+		edited.Matrix[0].RemoveAt(2);
+		if (edited.Sections.GetAndRemoveAlt("old") case .Ok(let removed))
+		{
+			delete removed.key;
+			DeleteDictionaryAndKeysAndValues!(removed.value);
+		}
+		edited.Sections["db"]["host"].Set("b");
+		Test.Assert(edited.KdlWrite(doc.Root) case .Ok);
+		let output = doc.Write(.. scope .());
+		Test.Assert(output == "matrix {\n    // first row\n    - 1 2\n    - 0x20\n}\nsections {\n    db { host \"b\" } // main\n}\n", output);
+	}
+
+	[Test]
+	public static void Nested_KeyErrors()
+	{
+		let nested = scope Nested();
+		switch (KdlSerializer.Read("by-id {\n    one \"x\"\n}", nested))
+		{
+		case .Ok: Test.Assert(false, "`one` is not an integer key");
+		case .Err(let error): Test.Assert(error.mKind == .InvalidValue && error.mLine == 2 && error.mMessage.Contains("not an integer"), error.ToString(.. scope .()));
+		}
+		switch (KdlSerializer.Read("widths {\n    middle 3\n}", nested))
+		{
+		case .Ok: Test.Assert(false, "`middle` is not an Align");
+		case .Err(let error): Test.Assert(error.mKind == .InvalidValue && error.mLine == 2 && error.mMessage.Contains("start, center, end-aligned"), error.ToString(.. scope .()));
+		}
+		switch (KdlSerializer.Read("by-id {\n    \"99999999999\" \"x\"\n}", nested))
+		{
+		case .Ok: Test.Assert(false, "out of int32's range");
+		case .Err(let error): Test.Assert(error.mKind == .InvalidValue && error.mMessage.Contains("outside the range"), error.ToString(.. scope .()));
+		}
 	}
 
 	// Decimal big integers are normalized directly
