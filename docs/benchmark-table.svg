@@ -1,0 +1,414 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1124" height="656" viewBox="0 0 1124 656" role="img" aria-label="Full KDL benchmark results: MB/s per library and input">
+
+  <style>
+    svg { font-family: system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; }
+    .title { font-size: 19px; font-weight: 650; fill: #1f2328; }
+    .subtitle, .footer, .axis { font-size: 12.5px; fill: #656d76; }
+    .group { font-size: 11px; font-weight: 650; letter-spacing: 0.08em; fill: #656d76; }
+    .label { font-size: 13.5px; fill: #1f2328; }
+    .lang { font-size: 11px; fill: #8c959f; }
+    .ours { font-weight: 700; }
+    .value { font-size: 12.5px; fill: #424a53; font-variant-numeric: tabular-nums; }
+    .value.ours { fill: #c2410c; }
+    .small { font-size: 12px; fill: #424a53; }
+    .note-plain { fill: #8c959f; }
+    .footnote { font-size: 12px; fill: #656d76; }
+    .repo { font-size: 11.5px; fill: #8c959f; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .bar { fill: #afb8c1; }
+    .bar-ours { fill: #ea580c; }
+    .rule { stroke: #d8dee4; stroke-width: 1; }
+    .libname { fill: #656d76; }
+    .libname.ours { fill: #c2410c; font-weight: 650; }
+    .colhead { font-size: 11px; font-weight: 600; fill: #424a53; }
+    .cell { font-size: 12px; fill: #424a53; font-variant-numeric: tabular-nums; }
+    .cell.best { font-weight: 700; fill: #1f2328; }
+    .cell.ours { fill: #c2410c; }
+    .cell-missing { font-size: 10px; fill: #8c959f; }
+    .heat { fill: #2da44e; }
+    .row-ours { fill: #ea580c; fill-opacity: 0.07; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .title, .label { fill: #e6edf3; }
+      .subtitle, .footer, .axis, .group { fill: #8d96a0; }
+      .lang, .note-plain { fill: #6e7681; }
+      .footnote { fill: #8d96a0; }
+      .repo { fill: #6e7681; }
+      .value, .small { fill: #c9d1d9; }
+      .value.ours { fill: #fb923c; }
+      .bar { fill: #3d444d; }
+      .bar-ours { fill: #f97316; }
+      .rule { stroke: #262c36; }
+      .libname { fill: #8d96a0; }
+      .libname.ours { fill: #fb923c; }
+      .colhead { fill: #c9d1d9; }
+      .cell { fill: #c9d1d9; }
+      .cell.best { fill: #f0f6fc; }
+      .cell.ours { fill: #fb923c; }
+      .cell-missing { fill: #6e7681; }
+      .heat { fill: #3fb950; }
+      .row-ours { fill: #f97316; fill-opacity: 0.10; }
+    }
+  </style>
+<rect class="bg" x="0" y="0" width="1124" height="656" rx="10"/>
+<line x1="698" y1="102" x2="698" y2="602" class="rule"/>
+<text x="40.0" y="44.0" class="title" text-anchor="start">Full results</text>
+<text x="40.0" y="66.0" class="subtitle" text-anchor="start">MB/s, higher is better (parsing: of input; writing: of output) · bold = best in its group · shading = relative to that best (log scale)</text>
+<text x="510.0" y="94.0" class="group" text-anchor="middle">PARSING (MB/s)</text>
+<text x="360.0" y="110.0" class="colhead" text-anchor="middle">UI</text>
+<text x="360.0" y="124.0" class="colhead" text-anchor="middle">markup</text>
+<text x="420.0" y="124.0" class="colhead" text-anchor="middle">config</text>
+<text x="480.0" y="124.0" class="colhead" text-anchor="middle">strings</text>
+<text x="540.0" y="124.0" class="colhead" text-anchor="middle">numbers</text>
+<text x="600.0" y="110.0" class="colhead" text-anchor="middle">HTML</text>
+<text x="600.0" y="124.0" class="colhead" text-anchor="middle">standard</text>
+<text x="660.0" y="110.0" class="colhead" text-anchor="middle">HTML std.</text>
+<text x="660.0" y="124.0" class="colhead" text-anchor="middle">compact</text>
+<text x="886.0" y="94.0" class="group" text-anchor="middle">WRITING (MB/s)</text>
+<text x="736.0" y="110.0" class="colhead" text-anchor="middle">UI</text>
+<text x="736.0" y="124.0" class="colhead" text-anchor="middle">markup</text>
+<text x="796.0" y="124.0" class="colhead" text-anchor="middle">config</text>
+<text x="856.0" y="124.0" class="colhead" text-anchor="middle">strings</text>
+<text x="916.0" y="124.0" class="colhead" text-anchor="middle">numbers</text>
+<text x="976.0" y="110.0" class="colhead" text-anchor="middle">HTML</text>
+<text x="976.0" y="124.0" class="colhead" text-anchor="middle">standard</text>
+<text x="1036.0" y="110.0" class="colhead" text-anchor="middle">HTML std.</text>
+<text x="1036.0" y="124.0" class="colhead" text-anchor="middle">compact</text>
+<text x="40.0" y="150.0" class="group" text-anchor="start">BUILDS A DOCUMENT</text>
+<line x1="40" y1="156.0" x2="1084" y2="156.0" class="rule"/>
+<rect x="40" y="156.0" width="1044" height="30" class="row-ours"/>
+<text x="40" y="175.5"><tspan class="lang">Beef</tspan><tspan x="86" class="label ours">KdlBeef</tspan><tspan class="repo" dx="7">mdsitton/KdlBeef</tspan></text>
+<rect x="332" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="383.0" y="175.5" class="cell best ours" text-anchor="end">250</text>
+<rect x="392" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="443.0" y="175.5" class="cell best ours" text-anchor="end">209</text>
+<rect x="452" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="503.0" y="175.5" class="cell best ours" text-anchor="end">291</text>
+<rect x="512" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="563.0" y="175.5" class="cell best ours" text-anchor="end">139</text>
+<rect x="572" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="623.0" y="175.5" class="cell best ours" text-anchor="end">233</text>
+<rect x="632" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="683.0" y="175.5" class="cell best ours" text-anchor="end">232</text>
+<rect x="708" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="759.0" y="175.5" class="cell best ours" text-anchor="end">330</text>
+<rect x="768" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="819.0" y="175.5" class="cell best ours" text-anchor="end">375</text>
+<rect x="828" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="879.0" y="175.5" class="cell best ours" text-anchor="end">471</text>
+<rect x="888" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="939.0" y="175.5" class="cell best ours" text-anchor="end">321</text>
+<rect x="948" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="999.0" y="175.5" class="cell best ours" text-anchor="end">403</text>
+<rect x="1008" y="159.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="1059.0" y="175.5" class="cell best ours" text-anchor="end">407</text>
+<line x1="40" y1="186.0" x2="1084" y2="186.0" class="rule"/>
+<text x="40" y="205.5"><tspan class="lang">Go</tspan><tspan x="86" class="label">gokdl2*</tspan><tspan class="repo" dx="7">njreid/gokdl2</tspan></text>
+<text x="384.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="444.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<rect x="452" y="189.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="503.0" y="205.5" class="cell" text-anchor="end">39.5</text>
+<text x="564.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="624.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="684.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="760.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="820.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<rect x="828" y="189.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.31"/>
+<text x="879.0" y="205.5" class="cell" text-anchor="end">143</text>
+<text x="940.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="1000.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="1060.0" y="205.0" class="cell-missing" text-anchor="end">FAIL</text>
+<line x1="40" y1="216.0" x2="1084" y2="216.0" class="rule"/>
+<text x="40" y="235.5"><tspan class="lang">Go</tspan><tspan x="86" class="label">kdly</tspan><tspan class="repo" dx="7">shimeoki/kdly</tspan></text>
+<rect x="332" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="383.0" y="235.5" class="cell" text-anchor="end">27.2</text>
+<rect x="392" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="443.0" y="235.5" class="cell" text-anchor="end">21.8</text>
+<rect x="452" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="503.0" y="235.5" class="cell" text-anchor="end">48.1</text>
+<rect x="512" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.26"/>
+<text x="563.0" y="235.5" class="cell" text-anchor="end">20.1</text>
+<rect x="572" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="623.0" y="235.5" class="cell" text-anchor="end">27.6</text>
+<rect x="632" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="683.0" y="235.5" class="cell" text-anchor="end">29.2</text>
+<rect x="708" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.26"/>
+<text x="759.0" y="235.5" class="cell" text-anchor="end">51.9</text>
+<rect x="768" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="819.0" y="235.5" class="cell" text-anchor="end">48.0</text>
+<rect x="828" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.31"/>
+<text x="879.0" y="235.5" class="cell" text-anchor="end">141</text>
+<rect x="888" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="939.0" y="235.5" class="cell" text-anchor="end">36.6</text>
+<rect x="948" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="999.0" y="235.5" class="cell" text-anchor="end">71.0</text>
+<rect x="1008" y="219.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="1059.0" y="235.5" class="cell" text-anchor="end">73.8</text>
+<line x1="40" y1="246.0" x2="1084" y2="246.0" class="rule"/>
+<text x="40" y="265.5"><tspan class="lang">C++</tspan><tspan x="86" class="label">kdlpp</tspan><tspan class="repo" dx="7">tjol/ckdl</tspan></text>
+<rect x="332" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="383.0" y="265.5" class="cell" text-anchor="end">29.8</text>
+<rect x="392" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="443.0" y="265.5" class="cell" text-anchor="end">22.6</text>
+<rect x="452" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="503.0" y="265.5" class="cell" text-anchor="end">33.7</text>
+<rect x="512" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.29"/>
+<text x="563.0" y="265.5" class="cell" text-anchor="end">32.1</text>
+<rect x="572" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="623.0" y="265.5" class="cell" text-anchor="end">23.0</text>
+<rect x="632" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="683.0" y="265.5" class="cell" text-anchor="end">23.6</text>
+<rect x="708" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.31"/>
+<text x="759.0" y="265.5" class="cell" text-anchor="end">99.8</text>
+<rect x="768" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.30"/>
+<text x="819.0" y="265.5" class="cell" text-anchor="end">94.4</text>
+<rect x="828" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="879.0" y="265.5" class="cell" text-anchor="end">83.8</text>
+<rect x="888" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.28"/>
+<text x="939.0" y="265.5" class="cell" text-anchor="end">65.7</text>
+<rect x="948" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.30"/>
+<text x="999.0" y="265.5" class="cell" text-anchor="end">102</text>
+<rect x="1008" y="249.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.30"/>
+<text x="1059.0" y="265.5" class="cell" text-anchor="end">99.1</text>
+<line x1="40" y1="276.0" x2="1084" y2="276.0" class="rule"/>
+<text x="40" y="295.5"><tspan class="lang">Java</tspan><tspan x="86" class="label">kdl4j</tspan><tspan class="repo" dx="7">kdl-org/kdl4j</tspan></text>
+<rect x="332" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.22"/>
+<text x="383.0" y="295.5" class="cell" text-anchor="end">22.7</text>
+<rect x="392" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="443.0" y="295.5" class="cell" text-anchor="end">20.7</text>
+<rect x="452" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="503.0" y="295.5" class="cell" text-anchor="end">34.2</text>
+<rect x="512" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="563.0" y="295.5" class="cell" text-anchor="end">17.4</text>
+<rect x="572" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.22"/>
+<text x="623.0" y="295.5" class="cell" text-anchor="end">20.2</text>
+<rect x="632" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="683.0" y="295.5" class="cell" text-anchor="end">22.2</text>
+<rect x="708" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="759.0" y="295.5" class="cell" text-anchor="end">54.4</text>
+<rect x="768" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="819.0" y="295.5" class="cell" text-anchor="end">60.4</text>
+<rect x="828" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.26"/>
+<text x="879.0" y="295.5" class="cell" text-anchor="end">67.7</text>
+<rect x="888" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.34"/>
+<text x="939.0" y="295.5" class="cell" text-anchor="end">152</text>
+<rect x="948" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="999.0" y="295.5" class="cell" text-anchor="end">41.7</text>
+<rect x="1008" y="279.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="1059.0" y="295.5" class="cell" text-anchor="end">45.5</text>
+<line x1="40" y1="306.0" x2="1084" y2="306.0" class="rule"/>
+<text x="40" y="325.5"><tspan class="lang">Python</tspan><tspan x="86" class="label">ckdl (Python)</tspan><tspan class="repo" dx="7">tjol/ckdl</tspan></text>
+<rect x="332" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.22"/>
+<text x="383.0" y="325.5" class="cell" text-anchor="end">21.5</text>
+<rect x="392" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="443.0" y="325.5" class="cell" text-anchor="end">14.9</text>
+<rect x="452" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.22"/>
+<text x="503.0" y="325.5" class="cell" text-anchor="end">23.9</text>
+<rect x="512" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="563.0" y="325.5" class="cell" text-anchor="end">25.3</text>
+<rect x="572" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="623.0" y="325.5" class="cell" text-anchor="end">14.9</text>
+<rect x="632" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="683.0" y="325.5" class="cell" text-anchor="end">15.8</text>
+<rect x="708" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="759.0" y="325.5" class="cell" text-anchor="end">60.2</text>
+<rect x="768" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="819.0" y="325.5" class="cell" text-anchor="end">48.2</text>
+<rect x="828" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.26"/>
+<text x="879.0" y="325.5" class="cell" text-anchor="end">68.3</text>
+<rect x="888" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="939.0" y="325.5" class="cell" text-anchor="end">40.0</text>
+<rect x="948" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.28"/>
+<text x="999.0" y="325.5" class="cell" text-anchor="end">81.7</text>
+<rect x="1008" y="309.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="1059.0" y="325.5" class="cell" text-anchor="end">72.6</text>
+<line x1="40" y1="336.0" x2="1084" y2="336.0" class="rule"/>
+<text x="40" y="355.5"><tspan class="lang">C#</tspan><tspan x="86" class="label">KdlSharp</tspan><tspan class="repo" dx="7">AndreyAkinshin/KdlSharp</tspan></text>
+<rect x="332" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.21"/>
+<text x="383.0" y="355.5" class="cell" text-anchor="end">19.4</text>
+<rect x="392" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="443.0" y="355.5" class="cell" text-anchor="end">13.1</text>
+<rect x="452" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="503.0" y="355.5" class="cell" text-anchor="end">29.7</text>
+<rect x="512" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="563.0" y="355.5" class="cell" text-anchor="end">14.5</text>
+<rect x="572" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="623.0" y="355.5" class="cell" text-anchor="end">16.5</text>
+<rect x="632" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.20"/>
+<text x="683.0" y="355.5" class="cell" text-anchor="end">16.4</text>
+<rect x="708" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.35"/>
+<text x="759.0" y="355.5" class="cell" text-anchor="end">161</text>
+<rect x="768" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.33"/>
+<text x="819.0" y="355.5" class="cell" text-anchor="end">140</text>
+<rect x="828" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.32"/>
+<text x="879.0" y="355.5" class="cell" text-anchor="end">159</text>
+<rect x="888" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.31"/>
+<text x="939.0" y="355.5" class="cell" text-anchor="end">93.1</text>
+<rect x="948" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.36"/>
+<text x="999.0" y="355.5" class="cell" text-anchor="end">232</text>
+<rect x="1008" y="339.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.34"/>
+<text x="1059.0" y="355.5" class="cell" text-anchor="end">184</text>
+<line x1="40" y1="366.0" x2="1084" y2="366.0" class="rule"/>
+<text x="40" y="385.5"><tspan class="lang">JS</tspan><tspan x="86" class="label">@bgotink/kdl</tspan><tspan class="repo" dx="7">bgotink/kdl</tspan></text>
+<rect x="332" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.19"/>
+<text x="383.0" y="385.5" class="cell" text-anchor="end">14.7</text>
+<rect x="392" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.19"/>
+<text x="443.0" y="385.5" class="cell" text-anchor="end">12.2</text>
+<rect x="452" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.19"/>
+<text x="503.0" y="385.5" class="cell" text-anchor="end">17.5</text>
+<rect x="512" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.22"/>
+<text x="563.0" y="385.5" class="cell" text-anchor="end">12.0</text>
+<rect x="572" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.18"/>
+<text x="623.0" y="385.5" class="cell" text-anchor="end">11.8</text>
+<rect x="632" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.19"/>
+<text x="683.0" y="385.5" class="cell" text-anchor="end">13.4</text>
+<rect x="708" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.31"/>
+<text x="759.0" y="385.5" class="cell" text-anchor="end">97.1</text>
+<rect x="768" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.28"/>
+<text x="819.0" y="385.5" class="cell" text-anchor="end">73.4</text>
+<rect x="828" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.37"/>
+<text x="879.0" y="385.5" class="cell" text-anchor="end">311</text>
+<rect x="888" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.29"/>
+<text x="939.0" y="385.5" class="cell" text-anchor="end">71.5</text>
+<rect x="948" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.27"/>
+<text x="999.0" y="385.5" class="cell" text-anchor="end">73.3</text>
+<rect x="1008" y="369.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.29"/>
+<text x="1059.0" y="385.5" class="cell" text-anchor="end">87.7</text>
+<line x1="40" y1="396.0" x2="1084" y2="396.0" class="rule"/>
+<text x="40" y="415.5"><tspan class="lang">JS</tspan><tspan x="86" class="label">kdljs</tspan><tspan class="repo" dx="7">kdl-org/kdljs</tspan></text>
+<rect x="332" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.13"/>
+<text x="383.0" y="415.5" class="cell" text-anchor="end">6.8</text>
+<rect x="392" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.13"/>
+<text x="443.0" y="415.5" class="cell" text-anchor="end">5.4</text>
+<rect x="452" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.17"/>
+<text x="503.0" y="415.5" class="cell" text-anchor="end">12.6</text>
+<rect x="512" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.17"/>
+<text x="563.0" y="415.5" class="cell" text-anchor="end">6.2</text>
+<rect x="572" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.12"/>
+<text x="623.0" y="415.5" class="cell" text-anchor="end">5.3</text>
+<rect x="632" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.13"/>
+<text x="683.0" y="415.5" class="cell" text-anchor="end">5.7</text>
+<rect x="708" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.23"/>
+<text x="759.0" y="415.5" class="cell" text-anchor="end">32.7</text>
+<rect x="768" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.18"/>
+<text x="819.0" y="415.5" class="cell" text-anchor="end">20.4</text>
+<rect x="828" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.13"/>
+<text x="879.0" y="415.5" class="cell" text-anchor="end">13.0</text>
+<rect x="888" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="939.0" y="415.5" class="cell" text-anchor="end">44.8</text>
+<rect x="948" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.19"/>
+<text x="999.0" y="415.5" class="cell" text-anchor="end">24.6</text>
+<rect x="1008" y="399.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.18"/>
+<text x="1059.0" y="415.5" class="cell" text-anchor="end">19.6</text>
+<line x1="40" y1="426.0" x2="1084" y2="426.0" class="rule"/>
+<text x="40" y="445.5"><tspan class="lang">Rust</tspan><tspan x="86" class="label">kdl-rs</tspan><tspan class="repo" dx="7">kdl-org/kdl-rs</tspan></text>
+<rect x="332" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.08"/>
+<text x="383.0" y="445.5" class="cell" text-anchor="end">3.4</text>
+<rect x="392" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.07"/>
+<text x="443.0" y="445.5" class="cell" text-anchor="end">2.4</text>
+<rect x="452" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="503.0" y="445.5" class="cell" text-anchor="end">2.3</text>
+<rect x="512" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.12"/>
+<text x="563.0" y="445.5" class="cell" text-anchor="end">3.1</text>
+<rect x="572" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="623.0" y="445.5" class="cell" text-anchor="end">2.4</text>
+<rect x="632" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.07"/>
+<text x="683.0" y="445.5" class="cell" text-anchor="end">2.5</text>
+<rect x="708" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.33"/>
+<text x="759.0" y="445.5" class="cell" text-anchor="end">127</text>
+<rect x="768" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.32"/>
+<text x="819.0" y="445.5" class="cell" text-anchor="end">120</text>
+<rect x="828" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.38"/>
+<text x="879.0" y="445.5" class="cell" text-anchor="end">356</text>
+<rect x="888" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.32"/>
+<text x="939.0" y="445.5" class="cell" text-anchor="end">112</text>
+<rect x="948" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.28"/>
+<text x="999.0" y="445.5" class="cell" text-anchor="end">79.8</text>
+<rect x="1008" y="429.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.29"/>
+<text x="1059.0" y="445.5" class="cell" text-anchor="end">89.5</text>
+<line x1="40" y1="456.0" x2="1084" y2="456.0" class="rule"/>
+<text x="40" y="475.5"><tspan class="lang">Python</tspan><tspan x="86" class="label">kdl-py*</tspan><tspan class="repo" dx="7">tabatkins/kdlpy</tspan></text>
+<rect x="332" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="383.0" y="475.5" class="cell" text-anchor="end">0.6</text>
+<rect x="392" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="443.0" y="475.5" class="cell" text-anchor="end">0.4</text>
+<rect x="452" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="503.0" y="475.5" class="cell" text-anchor="end">0.5</text>
+<rect x="512" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="563.0" y="475.5" class="cell" text-anchor="end">0.5</text>
+<text x="624.0" y="475.0" class="cell-missing" text-anchor="end">DNF</text>
+<text x="684.0" y="475.0" class="cell-missing" text-anchor="end">DNF</text>
+<rect x="708" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="759.0" y="475.5" class="cell" text-anchor="end">2.7</text>
+<rect x="768" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="819.0" y="475.5" class="cell" text-anchor="end">2.4</text>
+<rect x="828" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.12"/>
+<text x="879.0" y="475.5" class="cell" text-anchor="end">10.0</text>
+<rect x="888" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.11"/>
+<text x="939.0" y="475.5" class="cell" text-anchor="end">6.3</text>
+<text x="1000.0" y="475.0" class="cell-missing" text-anchor="end">DNF</text>
+<rect x="1008" y="459.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="1059.0" y="475.5" class="cell" text-anchor="end">3.9</text>
+<line x1="40" y1="486.0" x2="1084" y2="486.0" class="rule"/>
+<text x="40.0" y="506.0" class="group" text-anchor="start">EVENTS ONLY, NO DOCUMENT</text>
+<line x1="40" y1="512.0" x2="1084" y2="512.0" class="rule"/>
+<rect x="40" y="512.0" width="1044" height="30" class="row-ours"/>
+<text x="40" y="531.5"><tspan class="lang">Beef</tspan><tspan x="86" class="label ours">KdlBeef (events)</tspan><tspan class="repo" dx="7">mdsitton/KdlBeef</tspan></text>
+<rect x="332" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="383.0" y="531.5" class="cell best ours" text-anchor="end">320</text>
+<rect x="392" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="443.0" y="531.5" class="cell best ours" text-anchor="end">299</text>
+<rect x="452" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="503.0" y="531.5" class="cell best ours" text-anchor="end">341</text>
+<rect x="512" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="563.0" y="531.5" class="cell best ours" text-anchor="end">178</text>
+<rect x="572" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="623.0" y="531.5" class="cell best ours" text-anchor="end">306</text>
+<rect x="632" y="515.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.40"/>
+<text x="683.0" y="531.5" class="cell best ours" text-anchor="end">311</text>
+<text x="759.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<text x="819.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<text x="879.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<text x="939.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<text x="999.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<text x="1059.0" y="531.0" class="cell-missing" text-anchor="end">—</text>
+<line x1="40" y1="542.0" x2="1084" y2="542.0" class="rule"/>
+<text x="40" y="561.5"><tspan class="lang">C</tspan><tspan x="86" class="label">ckdl</tspan><tspan class="repo" dx="7">tjol/ckdl</tspan></text>
+<rect x="332" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.26"/>
+<text x="383.0" y="561.5" class="cell" text-anchor="end">46.2</text>
+<rect x="392" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="443.0" y="561.5" class="cell" text-anchor="end">32.6</text>
+<rect x="452" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.24"/>
+<text x="503.0" y="561.5" class="cell" text-anchor="end">37.6</text>
+<rect x="512" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.30"/>
+<text x="563.0" y="561.5" class="cell" text-anchor="end">48.9</text>
+<rect x="572" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="623.0" y="561.5" class="cell" text-anchor="end">37.6</text>
+<rect x="632" y="545.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.25"/>
+<text x="683.0" y="561.5" class="cell" text-anchor="end">38.3</text>
+<text x="759.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<text x="819.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<text x="879.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<text x="939.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<text x="999.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<text x="1059.0" y="561.0" class="cell-missing" text-anchor="end">—</text>
+<line x1="40" y1="572.0" x2="1084" y2="572.0" class="rule"/>
+<text x="40" y="591.5"><tspan class="lang">Zig</tspan><tspan x="86" class="label">zig-kdl*</tspan><tspan class="repo" dx="7">desttinghim/zig-kdl</tspan></text>
+<text x="384.0" y="591.0" class="cell-missing" text-anchor="end">FAIL</text>
+<rect x="392" y="575.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="443.0" y="591.5" class="cell" text-anchor="end">1.1</text>
+<rect x="452" y="575.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.06"/>
+<text x="503.0" y="591.5" class="cell" text-anchor="end">1.8</text>
+<rect x="512" y="575.0" width="56" height="24" rx="3" class="heat" fill-opacity="0.11"/>
+<text x="563.0" y="591.5" class="cell" text-anchor="end">3.6</text>
+<text x="624.0" y="591.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="684.0" y="591.0" class="cell-missing" text-anchor="end">FAIL</text>
+<text x="759.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<text x="819.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<text x="879.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<text x="939.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<text x="999.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<text x="1059.0" y="591.0" class="cell-missing" text-anchor="end">—</text>
+<line x1="40" y1="602.0" x2="1084" y2="602.0" class="rule"/>
+<text x="40.0" y="624.0" class="footnote" text-anchor="start">Each value is the median of 3 processes · FAIL = parse error or wrong node count · DNF = did not finish within 60 s · — = no writer · * see the notes under the chart</text>
+</svg>

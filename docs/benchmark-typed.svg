@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="320" viewBox="0 0 920 320" role="img" aria-label="KdlBeef typed serialization compared with other KDL libraries">
+
+  <style>
+    svg { font-family: system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; }
+    .title { font-size: 19px; font-weight: 650; fill: #1f2328; }
+    .subtitle, .footer, .axis { font-size: 12.5px; fill: #656d76; }
+    .group { font-size: 11px; font-weight: 650; letter-spacing: 0.08em; fill: #656d76; }
+    .label { font-size: 13.5px; fill: #1f2328; }
+    .lang { font-size: 11px; fill: #8c959f; }
+    .ours { font-weight: 700; }
+    .value { font-size: 12.5px; fill: #424a53; font-variant-numeric: tabular-nums; }
+    .value.ours { fill: #c2410c; }
+    .small { font-size: 12px; fill: #424a53; }
+    .note-plain { fill: #8c959f; }
+    .footnote { font-size: 12px; fill: #656d76; }
+    .repo { font-size: 11.5px; fill: #8c959f; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .bar { fill: #afb8c1; }
+    .bar-ours { fill: #ea580c; }
+    .rule { stroke: #d8dee4; stroke-width: 1; }
+    .libname { fill: #656d76; }
+    .libname.ours { fill: #c2410c; font-weight: 650; }
+    .colhead { font-size: 11px; font-weight: 600; fill: #424a53; }
+    .cell { font-size: 12px; fill: #424a53; font-variant-numeric: tabular-nums; }
+    .cell.best { font-weight: 700; fill: #1f2328; }
+    .cell.ours { fill: #c2410c; }
+    .cell-missing { font-size: 10px; fill: #8c959f; }
+    .heat { fill: #2da44e; }
+    .row-ours { fill: #ea580c; fill-opacity: 0.07; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .title, .label { fill: #e6edf3; }
+      .subtitle, .footer, .axis, .group { fill: #8d96a0; }
+      .lang, .note-plain { fill: #6e7681; }
+      .footnote { fill: #8d96a0; }
+      .repo { fill: #6e7681; }
+      .value, .small { fill: #c9d1d9; }
+      .value.ours { fill: #fb923c; }
+      .bar { fill: #3d444d; }
+      .bar-ours { fill: #f97316; }
+      .rule { stroke: #262c36; }
+      .libname { fill: #8d96a0; }
+      .libname.ours { fill: #fb923c; }
+      .colhead { fill: #c9d1d9; }
+      .cell { fill: #c9d1d9; }
+      .cell.best { fill: #f0f6fc; }
+      .cell.ours { fill: #fb923c; }
+      .cell-missing { fill: #6e7681; }
+      .heat { fill: #3fb950; }
+      .row-ours { fill: #f97316; fill-opacity: 0.10; }
+    }
+  </style>
+<rect class="bg" x="0" y="0" width="920" height="320" rx="10"/>
+<text x="40.0" y="44.0" class="title" text-anchor="start">Typed serialization: KDL to native types and back</text>
+<text x="40.0" y="66.0" class="subtitle" text-anchor="start">ui.kdl, 5 MB: 63,681 windows, containers and widgets · ms per operation, lower is better · every library binds the same values</text>
+<text x="40.0" y="96.0" class="group" text-anchor="start">READ · text → objects</text>
+<text x="232" y="120.0" class="small" text-anchor="end"><tspan class="libname ours">KdlBeef (no positions)</tspan><tspan class="lang" dx="5">Beef</tspan></text>
+<rect x="240" y="110.0" width="2.2" height="12" rx="2" class="bar-ours"/>
+<text x="248.2" y="120.0" class="small"><tspan class="value ours">30.2</tspan><tspan class="note-plain" dx="6">1.3× faster</tspan></text>
+<text x="232" y="140.0" class="small" text-anchor="end"><tspan class="libname ours">KdlBeef</tspan><tspan class="lang" dx="5">Beef</tspan></text>
+<rect x="240" y="130.0" width="2.9" height="12" rx="2" class="bar-ours"/>
+<text x="248.9" y="140.0" class="small"><tspan class="value ours">39.1</tspan><tspan class="note-plain" dx="6"></tspan></text>
+<text x="232" y="160.0" class="small" text-anchor="end"><tspan class="libname">KdlSharp</tspan><tspan class="lang" dx="5">C#</tspan></text>
+<rect x="240" y="150.0" width="24.1" height="12" rx="2" class="bar"/>
+<text x="270.1" y="160.0" class="small"><tspan class="value">324</tspan><tspan class="note-plain" dx="6">8.3× slower</tspan></text>
+<text x="232" y="180.0" class="small" text-anchor="end"><tspan class="libname">gokdl2</tspan><tspan class="lang" dx="5">Go</tspan></text>
+<rect x="240" y="170.0" width="27.1" height="12" rx="2" class="bar"/>
+<text x="273.1" y="180.0" class="small"><tspan class="value">364</tspan><tspan class="note-plain" dx="6">9.3× slower</tspan></text>
+<text x="232" y="200.0" class="small" text-anchor="end"><tspan class="libname">kdl-rs</tspan><tspan class="lang" dx="5">Rust</tspan></text>
+<rect x="240" y="190.0" width="110.0" height="12" rx="2" class="bar"/>
+<text x="356.0" y="200.0" class="small"><tspan class="value">1476</tspan><tspan class="note-plain" dx="6">37.8× slower</tspan></text>
+<text x="480.0" y="96.0" class="group" text-anchor="start">WRITE · objects → text</text>
+<text x="672" y="120.0" class="small" text-anchor="end"><tspan class="libname ours">KdlBeef</tspan><tspan class="lang" dx="5">Beef</tspan></text>
+<rect x="680" y="110.0" width="13.2" height="12" rx="2" class="bar-ours"/>
+<text x="699.2" y="120.0" class="small"><tspan class="value ours">23.5</tspan><tspan class="note-plain" dx="6"></tspan></text>
+<text x="672" y="140.0" class="small" text-anchor="end"><tspan class="libname">kdl-rs</tspan><tspan class="lang" dx="5">Rust</tspan></text>
+<rect x="680" y="130.0" width="69.8" height="12" rx="2" class="bar"/>
+<text x="755.8" y="140.0" class="small"><tspan class="value">125</tspan><tspan class="note-plain" dx="6">5.3× slower</tspan></text>
+<text x="672" y="160.0" class="small" text-anchor="end"><tspan class="libname">gokdl2</tspan><tspan class="lang" dx="5">Go</tspan></text>
+<rect x="680" y="150.0" width="85.6" height="12" rx="2" class="bar"/>
+<text x="771.6" y="160.0" class="small"><tspan class="value">153</tspan><tspan class="note-plain" dx="6">6.5× slower</tspan></text>
+<text x="672" y="180.0" class="small" text-anchor="end"><tspan class="libname">KdlSharp</tspan><tspan class="lang" dx="5">C#</tspan></text>
+<rect x="680" y="170.0" width="110.0" height="12" rx="2" class="bar"/>
+<text x="796.0" y="180.0" class="small"><tspan class="value">196</tspan><tspan class="note-plain" dx="6">8.4× slower</tspan></text>
+<text x="40.0" y="222.0" class="footnote" text-anchor="start">KdlBeef: KdlSerializer.Read records source positions for located errors; "no positions" reads the document without them.</text>
+<text x="40.0" y="240.0" class="footnote" text-anchor="start">Mappings: KdlBeef [KdlObject] (compile time), kdl-rs serde derive, gokdl2 struct tags, KdlSharp attributes (reflection).</text>
+<text x="40.0" y="258.0" class="footnote" text-anchor="start">Only KdlBeef keeps each container's mixed children in order and the (px) annotations; kdl-rs and gokdl2 group children</text>
+<text x="40.0" y="276.0" class="footnote" text-anchor="start">by kind, and KdlSharp cannot map the document by itself (its harness walks the tree). See typed-results.md.</text>
+<text x="40.0" y="304.0" class="footer" text-anchor="start">Linux x86-64, single thread · 1 s warm-up, then samples until 60% are within ±10% of their median · median of 3 processes · typed.sh</text>
+</svg>

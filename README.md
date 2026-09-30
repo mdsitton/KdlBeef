@@ -48,6 +48,41 @@ let panel = scope Panel();
 Try!(panel.KdlRead(doc.Nodes.Find("panel")));           // or KdlSerializer.Read(text, obj) for a document
 ```
 
+## Performance
+
+<p align="center"><img src="docs/benchmark.svg" alt="Parsing and writing throughput of KdlBeef compared with other KDL libraries" width="820"></p>
+
+<p align="center"><img src="docs/benchmark-table.svg" alt="Full benchmark results: MB/s for every library on every input, parsing and writing" width="880"></p>
+
+Every library parses the same inputs (four generated, 2–5 MB, and the 16–21 MB HTML-standard
+documents from the KDL repository's benchmark) from memory, single-threaded, on Linux x86-64, and writes the
+parsed document back to text. Each harness warms up for 1 s, then samples until at least 60% of its
+samples are within ±10% of their median; each value is the median of 3 separate processes. Every
+harness must report the same node count as ckdl, or its cell is FAIL. Event parsers (ckdl's C core,
+zig-kdl) build no document, so they are compared with KdlBeef's `KdlReader` pass rather than its
+document. Library versions are pinned. To reproduce, from `bench/compare/`:
+
+```bash
+./fetch.sh && ./build.sh && ./gen-inputs.py   # and beefbuild -config=Release at the repository root
+./run.sh > results.md && ./plot.py            # table of MB/s, then docs/benchmark*.svg
+```
+
+`results.md` has the table and notes on each harness.
+
+### Typed serialization
+
+Every library with a typed mapping reads the 5 MB UI markup into matching native types (windows,
+four container kinds, eight widget kinds) and writes them back (`bench/compare/typed.sh`, results
+and how faithfully each library maps the document in `bench/compare/typed-results.md`); each checks
+the same values after reading and after re-reading its own output:
+
+<p align="center"><img src="docs/benchmark-typed.svg" alt="Typed serialization: ms to read KDL into native types and write them back, KdlBeef against other libraries" width="820"></p>
+
+`[KdlObject]` generates the binding code at compile time and binds from a parsed document, so typed
+nodes and hand-edited ones can share a document. It is also the only mapping here that keeps a
+container's mixed children in order and the `(px)` annotations; kdl-rs and gokdl2 group children
+by kind, and KdlSharp needs the harness to walk the tree.
+
 ## Layout
 
 - `src/KdlBeef/` — the library (and `tests/`); `KdlTester/` — the command-line harness
