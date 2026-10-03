@@ -14,7 +14,7 @@ Last reviewed: 2026-10-03 (the move onto FormatCore). The deep review and reprod
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
 | `bash ./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
 | `bash ./test-codegen.sh` | 14/14 `[KdlObject]` build fixtures as expected (`tests/codegen`, with a second project depending on KdlBeef) |
-| `bash ../FormatCore/tools/sync.sh . --check` | PASS (the vendored scripts, bench-kit and the AGENTS.md block match FormatCore's) |
+| FormatCore's `bash tools/sync.sh <KdlBeef> --check` (run in a FormatCore checkout) | PASS (the vendored scripts, bench-kit and the AGENTS.md block match FormatCore's) |
 | `bash ./win-test.sh` (Test and TestRelease under the Proton-hosted Beef) | 79/79 pass in both |
 | `bash bench/instructions.sh` (Release `KdlTester -bench-loop`; FormatCore's bench-kit) | The table under Performance baseline |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
