@@ -1,4 +1,5 @@
 #!/bin/bash
+# Vendored from FormatCore tools/test-leaks.sh by tools/sync.sh: edit it there, then sync.
 # Leak check: runs the [Test] suite with LeakSanitizer preloaded and fails on any leak.
 # Usage: ./test-leaks.sh
 #

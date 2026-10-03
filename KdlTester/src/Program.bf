@@ -29,6 +29,8 @@ class Program
 {
 	public static int Main(String[] args)
 	{
+		if (args.Count > 0 && args[0] == "-bench-loop")
+			return BenchLoop(args);
 		if (args.Count > 0 && args[0] == "-bench-lookup")
 		{
 			int samples = 5;
@@ -176,6 +178,83 @@ class Program
 		}
 		Console.Out.Write(output);
 		Console.Out.Flush();
+		return 0;
+	}
+
+	/// `-bench-loop <events|document|stream|write> <file> <iterations> [buffer=N]`: a fixed number of
+	/// passes and nothing timed, for instruction counts (bench/instructions.sh) and `perf record`.
+	/// events: the reader over every event; document: KdlDocument.Read (the document reused); stream:
+	/// the reader's events from a Stream through a buffer (StreamBufferBytes, default 64 KiB);
+	/// write: the canonical write of the document.
+	static int BenchLoop(String[] args)
+	{
+		int iterations = 0;
+		if (args.Count >= 4 && int.Parse(args[3]) case .Ok(let parsed))
+			iterations = parsed;
+		if (iterations < 1)
+		{
+			Console.Error.WriteLine("usage: KdlTester -bench-loop <events|document|stream|write> <file> <iterations> [buffer=N]");
+			return 2;
+		}
+		var config = KdlReadConfig();
+		for (int i = 4; i < args.Count; i++)
+		{
+			StringView option = args[i];
+			if (option.StartsWith("buffer=") && int.Parse(option.Substring(7)) case .Ok(let size))
+				config.StreamBufferBytes = size;
+		}
+		let bytes = scope List<uint8>();
+		if (File.ReadAll(args[2], bytes) case .Err)
+		{
+			Console.Error.WriteLine($"cannot open {args[2]}");
+			return 2;
+		}
+		StringView input = .((char8*)bytes.Ptr, bytes.Count);
+		let doc = scope KdlDocument();
+		if (doc.Read(input) case .Err(let error))
+		{
+			Console.Error.WriteLine($"parse error: {error}");
+			return 1;
+		}
+		int total = 0;
+		switch (args[1])
+		{
+		case "events":
+			let reader = scope KdlReader();
+			for (int pass < iterations)
+			{
+				reader.Reset(input, config);
+				while (reader.Next() case .Ok(let event) && event != .EndOfDocument)
+					total++;
+			}
+		case "document":
+			for (int pass < iterations)
+			{
+				doc.Read(input, config).IgnoreError();
+				total += doc.Nodes.Count;
+			}
+		case "stream":
+			let reader = scope KdlReader();
+			for (int pass < iterations)
+			{
+				let stream = scope:: FixedMemoryStream(Span<uint8>(bytes.Ptr, bytes.Count));
+				reader.Reset(stream, config);
+				while (reader.Next() case .Ok(let event) && event != .EndOfDocument)
+					total++;
+			}
+		case "write":
+			let output = scope String();
+			for (int pass < iterations)
+			{
+				output.Clear();
+				doc.Write(output);
+				total += output.Length;
+			}
+		default:
+			Console.Error.WriteLine($"unknown loop mode {args[1]}");
+			return 2;
+		}
+		Console.WriteLine(total);
 		return 0;
 	}
 
