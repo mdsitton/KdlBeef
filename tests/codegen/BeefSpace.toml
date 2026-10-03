@@ -11,4 +11,3 @@ StartupProject = "Fixtures"
 Fixtures = {Path = "."}
 Other = {Path = "Other"}
 KdlBeef = {Path = "../.."}
-FormatCore = {Path = "../../../FormatCore"}
