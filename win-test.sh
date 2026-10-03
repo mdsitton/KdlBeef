@@ -4,12 +4,12 @@
 # and TestRelease configs, one after the other. The Windows Debug runtime also checks for leaks when the
 # test process exits (exit code 2147483651 after every test passed means a leak: AGENTS.md).
 # Usage: ./win-test.sh [configs...]       (default: Test TestRelease)
-#   BEEFBUILD_WIN  the wrapper to use (default: ~/development/beef-proton/bin/beefbuild-win)
+#   BEEFBUILD_WIN  the wrapper that runs the Windows BeefBuild (default: beefbuild-win on the PATH)
 set -uo pipefail
 cd "$(dirname "$0")"
-WIN="${BEEFBUILD_WIN:-$HOME/development/beef-proton/bin/beefbuild-win}"
-if [ ! -x "$WIN" ]; then
-	echo "ERROR: $WIN not found (set BEEFBUILD_WIN)"
+WIN="${BEEFBUILD_WIN:-$(command -v beefbuild-win)}"
+if [ -z "$WIN" ] || [ ! -x "$WIN" ]; then
+	echo "ERROR: no Windows BeefBuild wrapper (put beefbuild-win on the PATH or set BEEFBUILD_WIN)"
 	exit 1
 fi
 configs=("$@")

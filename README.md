@@ -2,7 +2,9 @@
 
 A [KDL 2.0](https://kdl.dev) parser and writer for the [Beef programming language](https://www.beeflang.org/),
 built for UI markup: fast, spec-compliant, with located errors, format preservation and compile-time
-typed mapping. The sibling of [TomlBeef](../TomlBeef).
+typed mapping. The sibling of [TomlBeef](https://github.com/mdsitton/TomlBeef),
+[XmlBeef](https://github.com/mdsitton/XmlBeef) and [JsonBeef](https://github.com/mdsitton/JsonBeef), built
+on [FormatCore](https://github.com/mdsitton/FormatCore).
 
 **Status:** reading, writing, editing, positions, limits, streams, collect-errors, style
 preservation and compile-time typed mapping (`[KdlObject]`) are done and pass the whole official

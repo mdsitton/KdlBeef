@@ -17,7 +17,7 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
   buffers when a string has escapes or is multi-line; they are valid until the next event.
 - Linux64 first; Windows verified through the Proton-hosted Beef (`AGENTS.md`).
-- **Built on FormatCore** (`~/development/FormatCore`, the shared core of the four format
+- **Built on FormatCore** (https://github.com/mdsitton/FormatCore, the shared core of the four format
   libraries): the input cursors, line counting, UTF-8 validation and helpers, the error carrier,
   numbers, the text arena and growable tables, tree links, the read shell and the typed-mapping driver
   are FormatCore's (its `docs/architecture.md`; `docs/migration.md` lists what moved). KDL's grammar,

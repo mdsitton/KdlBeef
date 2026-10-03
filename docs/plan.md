@@ -2,7 +2,7 @@
 
 KdlBeef is a KDL 2.0 parser and writer for the Beef programming language, written for a UI framework
 that uses KDL as its markup (an XML/YAML alternative). It is the sibling of TomlBeef
-(`~/development/TomlBeef`), a TOML 1.1 library by the same author that is fast, fully spec
+(https://github.com/mdsitton/TomlBeef), a TOML 1.1 library by the same author that is fast, fully spec
 compliant and format preserving; KdlBeef reuses its design, its tooling and, where it fits, its code.
 
 This document is the handoff for the session that starts the implementation. It records what exists,
@@ -130,8 +130,8 @@ document.
 - `KdlDocument` owns everything through a store (TomlBeef's `TomlDocumentStore.bf`: a
   `BumpAllocator` whose pools are recycled across reads). Strings are arena bytes viewed as
   `StringView` (TomlBeef's `NewKey`), not `String` objects with destructors.
-- **Nodes are IDs, not objects** (decided 2026-09-29, after Sizzle's `EntityGraph`,
-  `~/development/PortalEmulator/Sizzle/src/Entities/EntityGraph.bf`). Each node is a `KdlNodeId`
+- **Nodes are IDs, not objects** (decided 2026-09-29, after the `EntityGraph` of PortalEmulator's
+  Sizzle engine, `Sizzle/src/Entities/EntityGraph.bf`). Each node is a `KdlNodeId`
   (`uint32` index, 0 invalid) into the document's node table, which holds parallel arrays: name,
   annotation, entry range, and the hierarchy as parent / first child / last child / next sibling /
   previous sibling (20 bytes of links per node; no per-node children `List`). Building a node is a
@@ -356,7 +356,7 @@ equivalent); KQL (the author prefers API lookups to a selector language: typed g
   PreserveStyle, every valid input round-trips byte for byte. Known failures, if any, are listed and
   asserted to still fail. Never compare only structure (KdlSharp).
 - `[Test]` units per area from `spec-reference.md` (each bullet there is a test), in Debug and
-  Release; LeakSanitizer (`test-leaks.sh`); Windows via `~/development/beef-proton`.
+  Release; LeakSanitizer (`test-leaks.sh`); Windows via the Windows BeefBuild under Proton (`win-test.sh`).
 - Golden error messages for the `_fail` cases.
 - The benchmark inputs double as large-input tests (node counts must match the reference).
 

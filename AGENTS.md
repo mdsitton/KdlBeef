@@ -3,9 +3,9 @@
 ## Notes for coding agents
 
 - This repository is a Beef language project: a KDL 2.0 parser and writer, the sibling of TomlBeef
-  (`~/development/TomlBeef`, a TOML library by the same author). Much of its design and some of its
-  code come from there; `docs/plan.md` lists what to port.
-- **KdlBeef is built on FormatCore** (`~/development/FormatCore`, `https://github.com/mdsitton/FormatCore.git`):
+  (https://github.com/mdsitton/TomlBeef, a TOML library by the same author). Much of its design and
+  some of its code come from there; `docs/plan.md` lists what to port.
+- **KdlBeef is built on FormatCore** (https://github.com/mdsitton/FormatCore):
   the shared core of the four format libraries (input cursors, UTF-8 and SWAR scanning, errors,
   numbers, storage, the typed-mapping framework, test and benchmark tooling). The library depends on
   it by Git (`BeefProj.toml`, `Version = "0.1"`): BeefBuild fetches the highest matching tag and pins
@@ -14,8 +14,8 @@
   `BeefSpace_Lock.toml`; never copied here. FormatCore's `docs/migration.md` lists what moved.
 - Beef `String` stores UTF-8 data and is mutable. Prefer `StringView` for borrowed string inputs.
 - Beef uses manual and scope-based memory management. There is no tracing garbage collector.
-- This project currently targets Linux64 first; Windows is verified with the Proton-hosted Beef
-  (`~/development/beef-proton/bin/beefbuild-win`, `bash ./win-test.sh`).
+- This project currently targets Linux64 first; Windows is verified with the Windows BeefBuild under
+  Proton (a `beefbuild-win` wrapper on the PATH, `bash ./win-test.sh`).
 - Preferred CLI tool: `beefbuild` on Linux, `BeefBuild` on Windows. Use from `PATH`.
 - `tests/kdl-spec/` (the official KDL spec and test suite, fetched by `tests/fetch-spec.sh`) and
   `bench/compare/deps/` (other implementations, fetched by `bench/compare/fetch.sh`) are external,
@@ -49,7 +49,7 @@ This block is FormatCore's `docs/agents-common.md`, written into each repository
 - **Use US English spellings** in code, comments and documentation (neighbor, color, behavior).
 - **Commit as Matthew Sitton <matthewsitton@gmail.com>**: `git -c user.name="Matthew Sitton" -c user.email="matthewsitton@gmail.com" commit ...` (the global git identity can differ).
 - **Windows is verified**, not deferred: the `[Test]`s run under the Proton-hosted Windows Beef
-  (`~/development/beef-proton/bin/beefbuild-win`) in Test and TestRelease (`bash ./win-test.sh`)
+  (a `beefbuild-win` wrapper on the PATH, or `BEEFBUILD_WIN`) in Test and TestRelease (`bash ./win-test.sh`)
   before committing.
 - **Benchmarks do not wait for a quiet machine** (this machine never is): a benchmark's `run.sh` samples until each run converges and repeats processes until enough agree within ±10% (`bench/compare/measure.sh`, from FormatCore's bench-kit), marking a cell that never settles `~`. Run it as it is, whatever the load; report the load average and the `~` cells with the figures, and rerun (`ONLY=...`) cells that did not settle before drawing conclusions from them. A cell past its time limit is DNF, not waited out. Small changes are compared with `bench/instructions.sh` (user-space instructions per input byte), which the load does not disturb.
 - **Run shell scripts with bash** (`bash ./script.sh`): the interactive shell is not bash, and unquoted variables do not word-split.
@@ -200,7 +200,8 @@ Frame #0 is the crash point. Mangled names map to files (`bf::KdlBeef::KdlReader
 ## References
 
 - KDL 2.0 spec: `tests/kdl-spec/draft-marchan-kdl2.md` (fetched), https://kdl.dev
-- FormatCore: `~/development/FormatCore` (`docs/architecture.md`, `docs/migration.md`)
-- Official Beef documentation: `https://www.beeflang.org/docs/`; docs source `~/development/Beef_website`
-- Beef language and tool source: `~/development/Beef`
-- TomlBeef: `~/development/TomlBeef`, especially `docs/architecture.md`
+- FormatCore: https://github.com/mdsitton/FormatCore (`docs/architecture.md`, `docs/migration.md`)
+- Official Beef documentation: https://www.beeflang.org/docs/; docs source
+  https://github.com/beefytech/Beef_website
+- Beef language and tool source: https://github.com/beefytech/Beef
+- TomlBeef: https://github.com/mdsitton/TomlBeef, especially `docs/architecture.md`
