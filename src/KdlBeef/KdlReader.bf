@@ -59,9 +59,9 @@ public enum KdlEvent : uint8
 /// ```
 public class KdlReader
 {
-	KdlReaderCore<KdlByteCursor> mBytes ~ delete _;
-	KdlReaderCore<KdlBufferedStreamCursor> mStream ~ delete _;
-	KdlStreamState mStreamState ~ delete _;
+	KdlReaderCore<ByteCursor<KdlText>> mBytes ~ delete _;
+	KdlReaderCore<BufferedStreamCursor<KdlText>> mStream ~ delete _;
+	InputState mStreamState ~ delete _;
 	bool mStreaming;
 
 	/// @brief Create a reader with no input; call Reset before reading.
@@ -101,7 +101,7 @@ public class KdlReader
 	public void Reset(StringView input, KdlReadConfig config)
 	{
 		mStreaming = false;
-		mBytes.Reset(KdlByteCursor(input, config), config);
+		mBytes.Reset(ByteCursor<KdlText>(input, KdlText.InputSettingsOf(config)), config);
 	}
 
 	/// @brief Start reading a stream with the default config.
@@ -125,7 +125,7 @@ public class KdlReader
 			mStream = new .();
 			mStreamState = new .();
 		}
-		mStream.Reset(KdlBufferedStreamCursor(stream, mStreamState, config), config);
+		mStream.Reset(BufferedStreamCursor<KdlText>(stream, mStreamState, KdlText.InputSettingsOf(config)), config);
 	}
 
 	/// @brief StartNode: the node's name. Property: the key.
@@ -210,7 +210,7 @@ public class KdlReader
 ///   until the next event (Grow rebases them when the window moves). mError views the per-thread
 ///   error buffers: nothing may make another KdlParseError between recording it and Next returning it
 ///   (recovery asks the cursor HasInputError, never TryGetInputError).
-internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
+internal class KdlReaderCore<TCursor> where TCursor : IInputCursor
 {
 	enum State : uint8
 	{
@@ -256,7 +256,6 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		public int32 mBlockCloseEnd;
 	}
 
-	internal TCursor mCursor;
 	char8* mData;
 	int mBase;
 	int mPos;
@@ -273,7 +272,6 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	int mSuppressed;
 	/// The property lookahead after the last argument consumed the whitespace before the next entry.
 	bool mPendingSpace;
-	KdlParseError mError;
 
 	String mNameBuffer ~ delete _;
 	String mAnnotationBuffer ~ delete _;
@@ -327,6 +325,9 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	int mStringStart;
 	bool mEndAfterRecovery;
 	bool mClosingAtEnd;
+	// The two largest fields last, so the hot fields above stay at small offsets
+	KdlParseError mError;
+	internal TCursor mCursor;
 
 	public this()
 	{
@@ -620,7 +621,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 			mContentStart = start;
 			mSliceStart = start;
 		case .Err(let error):
-			mError = error;
+			mError = KdlText.ErrorOf(error);
 			if (!mConfig.SourceName.IsEmpty)
 				mError.SetSource(mConfig.SourceName);
 			return .Err(.());
@@ -933,7 +934,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	{
 		frame.mBraceOffset = (int32)mPos;
 		frame.mBraceLine = 0;
-		if (mCursor.LocatesOnlyForward && mCursor.Locate(mPos, let line, let column))
+		if (!mCursor.IsWhole && mCursor.Locate(mPos, let line, let column))
 		{
 			frame.mBraceLine = (int32)line;
 			frame.mBraceColumn = (int32)column;
@@ -1097,7 +1098,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	{
 		line = 0;
 		column = 0;
-		if (mCursor.LocatesOnlyForward && mCursor.Locate(pos, var l, var c))
+		if (!mCursor.IsWhole && mCursor.Locate(pos, var l, var c))
 		{
 			line = l;
 			column = c;
@@ -1450,7 +1451,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 	KdlFailure Fail(KdlErrorKind kind, StringView message, int offset, int length = 1)
 	{
 		if (mInputFailed && mCursor.TryGetInputError(let inputError))
-			mError = inputError;
+			mError = KdlText.ErrorOf(inputError);
 		else
 		{
 			int line = 0;

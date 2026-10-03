@@ -76,6 +76,28 @@ internal struct KdlText : ITextPolicy
 		get => false;
 	}
 
+	/// @brief The cursor settings of a read config.
+	/// @param config The read config.
+	/// @return The settings (a leading BOM skipped; UTF-16/32 input reported as such).
+	public static InputSettings InputSettingsOf(KdlReadConfig config)
+	{
+		InputSettings settings = default;
+		settings.mMaxInputBytes = config.MaxInputBytes;
+		settings.mMaxTokenBytes = config.MaxTokenBytes;
+		settings.mStreamBufferBytes = config.StreamBufferBytes;
+		settings.mBom = .Skip;
+		settings.mFormatName = "KDL";
+		return settings;
+	}
+
+	/// @brief An input error from FormatCore's cursors as a KDL error (its message copied).
+	/// @param error The input error.
+	/// @return The KDL error.
+	public static KdlParseError ErrorOf(InputError error)
+	{
+		return KdlParseError(ErrorKindOf(error.mKind), error.mMessage, error.mLine, error.mColumn, error.mOffset, error.mLength);
+	}
+
 	/// @brief KDL's error kind for an input error from FormatCore's cursors and validator.
 	/// @param kind The input error's kind.
 	/// @return The KDL kind.
