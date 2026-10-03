@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -18,89 +20,37 @@ extension KdlDocument
 		return .(this, id);
 	}
 
-	// Links
+	// Links (FormatCore's Tree over the node table)
 
 	/// Links an unlinked node before `sibling`, under the sibling's parent.
 	internal void LinkBefore(uint32 sibling, uint32 child)
 	{
-		ref KdlNodeRecord s = ref mNodes[sibling];
-		ref KdlNodeRecord c = ref mNodes[child];
-		ref KdlNodeRecord p = ref mNodes[s.mParent];
-		c.mParent = s.mParent;
-		c.mNextSibling = sibling;
-		c.mPrevSibling = s.mPrevSibling;
-		if (s.mPrevSibling != 0)
-			mNodes[s.mPrevSibling].mNextSibling = child;
-		else
-			p.mFirstChild = child;
-		s.mPrevSibling = child;
-		p.mChildCount++;
+		KdlTree.LinkBefore(mNodes.Ptr, sibling, child);
 	}
 
 	/// Links an unlinked node after `sibling`, under the sibling's parent.
 	internal void LinkAfter(uint32 sibling, uint32 child)
 	{
-		uint32 next = mNodes[sibling].mNextSibling;
-		if (next != 0)
-			LinkBefore(next, child);
-		else
-			LinkLastChild(mNodes[sibling].mParent, child);
+		KdlTree.LinkAfter(mNodes.Ptr, sibling, child);
 	}
 
 	/// Takes a node (and its subtree) out of its parent's children; it stays in the table.
 	internal void Unlink(uint32 id)
 	{
-		ref KdlNodeRecord c = ref mNodes[id];
-		ref KdlNodeRecord p = ref mNodes[c.mParent];
-		if (c.mPrevSibling != 0)
-			mNodes[c.mPrevSibling].mNextSibling = c.mNextSibling;
-		else
-			p.mFirstChild = c.mNextSibling;
-		if (c.mNextSibling != 0)
-			mNodes[c.mNextSibling].mPrevSibling = c.mPrevSibling;
-		else
-			p.mLastChild = c.mPrevSibling;
-		p.mChildCount--;
-		c.mParent = 0;
-		c.mNextSibling = 0;
-		c.mPrevSibling = 0;
+		KdlTree.Unlink(mNodes.Ptr, id);
 	}
 
 	/// Unlinks a node and marks it and every descendant removed. Their slots are not reused before
 	/// Clear, so handles to them become invalid rather than naming other nodes.
 	internal void RemoveNode(uint32 id)
 	{
-		Unlink(id);
-		// Walk the subtree through the links; the removed node's parent is now 0, so the walk stops
-		// on returning to it
-		uint32 current = id;
-		while (true)
-		{
-			mNodes[current].mFlags |= .Removed;
-			if (mNodes[current].mFirstChild != 0)
-			{
-				current = mNodes[current].mFirstChild;
-				continue;
-			}
-			while (current != id && mNodes[current].mNextSibling == 0)
-				current = mNodes[current].mParent;
-			if (current == id)
-				return;
-			current = mNodes[current].mNextSibling;
-		}
+		KdlTree.RemoveSubtree(mNodes.Ptr, id);
 	}
 
 	/// Whether `ancestor` is `id` or one of its ancestors.
 	internal bool IsSelfOrAncestor(uint32 ancestor, uint32 id)
 	{
-		uint32 current = id;
-		while (current != 0)
-		{
-			if (current == ancestor)
-				return true;
-			current = mNodes[current].mParent;
-		}
-		return false;
+		return KdlTree.IsSelfOrAncestor(mNodes.Ptr, ancestor, id);
 	}
 
 	// Entries

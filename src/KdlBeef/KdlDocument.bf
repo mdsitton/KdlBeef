@@ -26,8 +26,9 @@ internal enum KdlEntryFlags : uint8
 }
 
 /// A node's slot in the document's node table. Links are node IDs; 0 means none, except that a
-/// parent of 0 is the hidden root, which holds the top-level nodes as its children.
-internal struct KdlNodeRecord
+/// parent of 0 is the hidden root, which holds the top-level nodes as its children. FormatCore's
+/// `Tree` links and walks the table through the `ITreeRecord` accessors (inlined to the fields).
+internal struct KdlNodeRecord : ITreeRecord
 {
 	public StringView mName;
 	public StringView mAnnotation;
@@ -43,7 +44,37 @@ internal struct KdlNodeRecord
 	public uint32 mNextSibling;
 	public uint32 mPrevSibling;
 	public KdlNodeFlags mFlags;
+
+	public uint32 Parent { [Inline] get => mParent; [Inline] set mut => mParent = value; }
+	public uint32 FirstChild { [Inline] get => mFirstChild; [Inline] set mut => mFirstChild = value; }
+	public uint32 LastChild { [Inline] get => mLastChild; [Inline] set mut => mLastChild = value; }
+	public uint32 Next { [Inline] get => mNextSibling; [Inline] set mut => mNextSibling = value; }
+	public uint32 Prev { [Inline] get => mPrevSibling; [Inline] set mut => mPrevSibling = value; }
+	public int32 ChildCount { [Inline] get => mChildCount; [Inline] set mut => mChildCount = value; }
+
+	[Inline]
+	public void SetLastChildAndCount(uint32 last, int32 count) mut
+	{
+		mLastChild = last;
+		mChildCount = count;
+	}
+
+	public bool IsRemoved
+	{
+		[Inline]
+		get => mFlags.HasFlag(.Removed);
+	}
+
+	[Inline]
+	public void MarkRemoved() mut
+	{
+		mFlags |= .Removed;
+	}
 }
+
+/// The node table's link operations: FormatCore's, with slot 0 the hidden root (a container, never a
+/// node anyone descends from).
+typealias KdlTree = Tree<KdlNodeRecord, const false>;
 
 /// An argument or property. (A packed 48-byte form, with the value rebuilt from a tag on every read,
 /// was measured slower on every input: numbers read 142 → 129 MB/s, written 321 → 187.)
@@ -458,19 +489,10 @@ public class KdlDocument
 	}
 
 	/// Links an unlinked node as the last child of `parent` (0: a top-level node).
+	[Inline]
 	internal void LinkLastChild(uint32 parent, uint32 child)
 	{
-		ref KdlNodeRecord p = ref mNodes[parent];
-		ref KdlNodeRecord c = ref mNodes[child];
-		c.mParent = parent;
-		c.mNextSibling = 0;
-		c.mPrevSibling = p.mLastChild;
-		if (p.mLastChild != 0)
-			mNodes[p.mLastChild].mNextSibling = child;
-		else
-			p.mFirstChild = child;
-		p.mLastChild = child;
-		p.mChildCount++;
+		KdlTree.LinkLast(mNodes.Ptr, parent, child);
 	}
 
 	// Writing
