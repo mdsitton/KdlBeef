@@ -1,6 +1,7 @@
 # KdlBeef status
 
-Last reviewed: 2026-09-30. The deep review and reproduced issues are in [review.md](review.md).
+Last reviewed: 2026-10-03 (the move onto FormatCore). The deep review and reproduced issues are in
+[review.md](review.md).
 
 ## Verification baseline
 
@@ -11,12 +12,33 @@ Last reviewed: 2026-09-30. The deep review and reproduced issues are in [review.
 | `./test-kdl-spec.sh` (Debug `KdlTester`; run `beefbuild` first) | In all four modes (document, events, stream with a 16-byte buffer, collect-errors): 243/243 valid cases match `expected_kdl`, 95/95 `_fail` cases rejected with the message in `tests/errors/<name>.err` (`UPDATE_GOLDEN=1` rewrites them; review the diff) |
 | `BIN=./build/Release_Linux64/KdlTester/KdlTester ./test-kdl-spec.sh` (run `beefbuild -config=Release` first) | Same as Debug |
 | `./test-roundtrip.sh` (and with the Release `BIN`) | PreserveStyle: 245/245 (valid suite inputs and the HTML-standard documents) written back byte for byte, from memory and through a 16-byte stream buffer |
-| `./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
-| `beefbuild-win -test`, `beefbuild-win -test -config=TestRelease` (`~/development/beef-proton`) | 79/79 pass |
+| `bash ./test-leaks.sh` | No leaks (LeakSanitizer over the TestRelease `[Test]`s) |
+| `bash ./test-codegen.sh` | 14/14 `[KdlObject]` build fixtures as expected (`tests/codegen`, with a second project depending on KdlBeef) |
+| `bash ../FormatCore/tools/sync.sh . --check` | PASS (the vendored scripts, bench-kit and the AGENTS.md block match FormatCore's) |
+| `bash ./win-test.sh` (Test and TestRelease under the Proton-hosted Beef) | 79/79 pass in both |
+| `bash bench/instructions.sh` (Release `KdlTester -bench-loop`; FormatCore's bench-kit) | The table under Performance baseline |
 | `tests/fetch-spec.sh` | kdl-spec at 89c1087, 338 test inputs |
 | `bench/compare/run.sh` (KdlBeef columns: `beefbuild -config=Release` first; `ONLY="KdlBeef\|KdlBeef events"` for just those) | 16 implementations on 6 inputs (knus on KDL v1 translations in `inputs/v1/`); results in `bench/compare/results.md`; `bench/compare/plot.py` redraws the README charts (`docs/benchmark*.svg`) from it and `typed-results.md` |
 
 ## Performance baseline
+
+User-space instructions per input byte (`bash bench/instructions.sh`, 2026-10-03, after the move onto
+FormatCore; the first row of each pair is before it, at 84f2bc2):
+
+| input | events | document | stream | stream4k | write |
+|---|---:|---:|---:|---:|---:|
+| ui (before) | 40.77 | 48.44 | 87.81 | 86.91 | 23.93 |
+| ui | 39.59 | 45.62 | 57.53 | 57.69 | 23.93 |
+| config (before) | 52.85 | 65.87 | 82.55 | 82.65 | 31.17 |
+| config | 51.89 | 62.34 | 73.49 | 73.63 | 31.17 |
+| strings (before) | 47.44 | 51.80 | 70.54 | 70.65 | 22.45 |
+| strings | 46.83 | 50.42 | 68.11 | 68.14 | 22.45 |
+| numbers (before) | 82.43 | 94.28 | 113.77 | 113.88 | 33.15 |
+| numbers | 76.51 | 86.91 | 96.11 | 96.29 | 33.15 |
+| html-standard (before) | 41.64 | 51.60 | 90.58 | 90.49 | 32.64 |
+| html-standard | 41.52 | 49.66 | 84.12 | 84.19 | 32.64 |
+| html-standard-compact (before) | 38.92 | 48.70 | 86.77 | 86.03 | 30.63 |
+| html-standard-compact | 38.81 | 46.73 | 72.03 | 72.12 | 30.63 |
 
 `KdlTester -bench` on `bench/compare/inputs` (MB/s, the benchmark rule of `run.sh`, 2026-09-30;
 `results.md` has the earlier run beside the other implementations):
@@ -76,6 +98,7 @@ Sizes are rough: S ≈ hours, M ≈ a day or two, L ≈ multi-day.
 |----|------|------|
 | R | [Review](review.md) follow-ups: R1-R9 and F1-F5 are fixed, each with a regression test (see the review's resolutions). Left: the review's optional API additions (entry annotation setters, strict typed binding, unsigned getters, editable slashdashed content) | M |
 | P5 | PreserveStyle refinements, if wanted: underscore grouping and digit counts of changed numbers (TomlBeef's `TomlIntegerFormat`), re-indenting a node's subtree when it moves to another depth, a style API to set formats in code | S |
+| F | FormatCore follow-ups: the entry ranges and per-entry side tables onto FormatCore's `RangeTable`/`SideTable` (needs the node record's inline entry-range fields as an `ItemRange`); the generator's planning onto FormatCore's `Planner<TFormat>` (today only its driver, registry and helpers are used); `bench/compare/run.sh` onto the vendored `merge.sh`/`measure.sh` (vendored, not yet called) | M |
 | Q | Open questions for the author (`docs/plan.md` §9) | — |
 
 ## Suggested order

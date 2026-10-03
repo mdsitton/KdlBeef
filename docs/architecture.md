@@ -17,6 +17,12 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 - **No per-node allocation.** The reader's events are views into the input, or into three reusable
   buffers when a string has escapes or is multi-line; they are valid until the next event.
 - Linux64 first; Windows verified through the Proton-hosted Beef (`AGENTS.md`).
+- **Built on FormatCore** (`~/development/FormatCore`, the shared core of the four format
+  libraries): the input cursors, line counting, UTF-8 validation and helpers, the error carrier,
+  numbers, the text arena and growable tables, tree links, the read shell and the typed-mapping driver
+  are FormatCore's (its `docs/architecture.md`; `docs/migration.md` lists what moved). KDL's grammar,
+  error kinds, recovery, document records, PreserveStyle and canonical forms stay here; `KdlText`
+  gives FormatCore KDL's character rules.
 
 ## 2. Source layout
 
@@ -36,14 +42,14 @@ Code conventions and Beef gotchas are in `AGENTS.md`.
 | `KdlBind.bf` | `KdlValueRef`, `KdlValueWriter` and the runtime helpers the generated code calls |
 | `IKdlSerializable.bf` | `IKdlSerializable`, `IKdlConverter<T>`, `[KdlConverter]`, `[KdlUseConverter]` |
 | `KdlSerializer.bf` | `KdlSerializer.Read`/`ReadFile`/`Write`/`WriteFile` for whole documents |
-| `KdlDocumentStore.bf` | Internal: the document's text arena (a pool-recycling `BumpAllocator`, from TomlBeef) and `OwnValue` |
+| `KdlDocumentStore.bf` | Internal: the document's text (a FormatCore `TextArena`) and `OwnValue` |
 | `KdlReader.bf` | `KdlEvent`; `KdlReader` (public: dispatches to an in-memory or a stream core); `KdlReaderCore<TCursor>`: the state machine (nodes, entries, children, slashdash suppression), whitespace, comments, line continuations and the window helpers |
 | `KdlReader.Values.bf` | `extension KdlReaderCore<TCursor>`: strings (identifier, quoted, raw, multi-line with dedent), escapes, numbers, keywords |
-| `KdlCursor.bf` | Internal: `IKdlCursor`, `KdlByteCursor` (in memory), `KdlBufferedStreamCursor` and `KdlStreamState` (streams), `KdlLineCounter` |
+| `KdlText.bf` | Internal: `KdlText`, KDL's `ITextPolicy` for FormatCore (banned code points and their messages, the newline set), the cursor settings of a read config and the mapping of FormatCore's input errors to `KdlParseError` |
 | `KdlValue.bf` | `KdlValue`, the non-owning tagged union: `Null`, `Bool`, `Integer` (int64 + lexeme), `Float` (double + lexeme), `BigInteger` (lexeme), `String` |
 | `KdlCanonical.bf` | `KdlCanonical.Format` (input → canonical text through the reader) and the canonical value, string and number formatting the document writer will share |
-| `KdlChar.bf` | Internal: identifier, whitespace, newline and disallowed-code-point classes; UTF-8 decode/encode; `FindInvalid` and `CompleteSequencesEnd` (validation of any range); `LineAndColumn` |
-| `KdlError.bf` | `KdlErrorKind` and `KdlParseError` (TomlBeef's error model: per-thread message buffer, no cleanup) |
+| `KdlChar.bf` | Internal: identifier, whitespace, newline and disallowed-code-point classes; the quoted-string stop scan (UTF-8, hex and validation are FormatCore's `Utf8` and `Hex`) |
+| `KdlError.bf` | `KdlErrorKind`; `KdlParseError` and `KdlDiagnostic`, typealiases of FormatCore's `ParseError<KdlErrorKind>` and `Diagnostic<KdlErrorKind>` (per-thread message buffers, no cleanup) |
 | `KdlVersion.bf` | `KdlVersion { V1, V2 }` (unused until KDL v1 input, if ever) |
 
 Tests are in `src/KdlBeef/tests/`; the CLI is `KdlTester/src/Program.bf`; the acceptance scripts are
@@ -53,23 +59,26 @@ Tests are in `src/KdlBeef/tests/`; the CLI is `KdlTester/src/Program.bf`; the ac
 
 ### Cursors and the window
 
-The reader is `KdlReaderCore<TCursor>`, specialized for two cursors (TomlBeef's `ITomlCursor`
-design, reshaped for a reader that scans raw bytes). The public `KdlReader` holds one core of each,
-creates the stream one on first use, and dispatches on which is reading.
+The reader is `KdlReaderCore<TCursor>`, specialized for FormatCore's two cursors,
+`ByteCursor<KdlText>` and `BufferedStreamCursor<KdlText>` (`IInputCursor`; the window design began
+here, from TomlBeef's `ITomlCursor`, and moved to FormatCore). The public `KdlReader` holds one core of
+each, creates the stream one on first use, and dispatches on which is reading. The core's two largest
+fields (the cursor and the pending error) come last: placed first they cost up to 1% of the
+instructions per byte.
 
 The core reads a **window**: `mData[offset]` for `mBase <= offset < mEnd`, with absolute offsets
 (`mData` is the buffer pointer minus `mBase`), so every offset the reader keeps (token starts, frame
 positions) stays valid when a stream moves its buffer. Every read that may reach the window's end
 goes through a helper that asks for more first: `Avail(pos)`, `AvailN`, `PeekAt`, `NewlineAt`,
 `SpaceAt` (up to 3 bytes: CRLF and multi-byte spaces never split), `DecodeAt` (4), `ScanQuoted`.
-They call `Grow`, which calls `IKdlCursor.Fill`:
+They call `Grow`, which calls `IInputCursor.Fill`:
 
-- `KdlByteCursor` (in-memory text): the window is the whole input and `Fill` is an inlined `false`,
+- `ByteCursor` (in-memory text): the window is the whole input and `Fill` is an inlined `false`,
   so `Grow` folds to `return false` and `Avail(pos)` to `pos < mEnd`. `Grow` must stay `[Inline]`
   and return a constant when `Fill` adds nothing, and hot loops advance a local position rather
   than `mPos` (a store per byte): without these the in-memory path lost 25%. It is now within about
   5% of the pre-cursor reader.
-- `KdlBufferedStreamCursor` (a `Stream`, from TomlBeef's `TomlBufferedStreamCursor`): a buffer
+- `BufferedStreamCursor` (a `Stream`; KdlBeef's stream cursor merged with JsonBeef's in FormatCore): a buffer
   (64 KiB by default, `StreamBufferBytes`) holding the window from the current construct on
   (`mRetain`: the node or entry being read; nothing between constructs). A refill counts the lines of
   the bytes it drops, moves the rest to the front and reads more; a construct longer than the buffer
@@ -84,10 +93,12 @@ They call `Grow`, which calls `IKdlCursor.Fill`:
 
 ### Validation
 
-`KdlChar.FindInvalid` checks a range for invalid UTF-8 (overlongs, surrogates, > U+10FFFF, bad or
-truncated sequences) and the code points KDL bans everywhere (U+0000–0008, U+000E–001F, DEL, bidi
-controls, U+FEFF after position 0). Words of ASCII with no control characters other than tab, LF and
-CR are skipped 8 bytes at a time (`IsPlainAsciiWord`, exact per-byte tests). The byte cursor checks
+FormatCore's `Utf8.FindInvalid<KdlText>` checks a range for invalid UTF-8 (Unicode table 3-7:
+overlongs, surrogates, > U+10FFFF, bad or truncated sequences, reported at the lead byte with
+messages that name the bytes) and the code points KDL bans everywhere (`KdlText`: U+0000–0008,
+U+000E–001F, DEL, bidi controls, U+FEFF after position 0). Words of ASCII with no control characters
+other than tab, LF and CR are skipped 32 and 8 bytes at a time (`KdlText.IsPlainWord`, exact per-byte
+tests). UTF-16 and UTF-32 input is reported as such ("The input is UTF-16LE (KDL must be UTF-8)"). The byte cursor checks
 the whole input in `Begin`, before the first event. The stream cursor checks each read as it
 arrives, up to the last complete sequence (`CompleteSequencesEnd`), and its window ends there: the
 reader never sees unchecked bytes. `Begin` fills and checks the first buffer, so a document that fits
@@ -124,11 +135,15 @@ golden one), and random mutations of the suite's inputs never crash or hang it.
 
 ### Positions and error locations
 
-Errors and positions are located by the cursor (`Locate`), with forward `KdlLineCounter`s: the byte
-cursor counts from its last answer (or from the start for an earlier offset). The stream cursor keeps
+Errors and positions are located by the cursor (`Locate`), with forward FormatCore
+`LineCounter<KdlText>`s: newlines are found 16 bytes at a time while a word holds no candidate byte
+(below 0x0E, or 0xC2/0xE2, the lead bytes of NEL, LS and PS), and columns are counted only on request
+(this made stream reads 9-34% cheaper in instructions than the per-code-point counter). An offset on
+the LF of a CRLF is on the line the CRLF ends (XML's and JSON's rule; KdlBeef counted it at the CR).
+The byte cursor counts from its last answer (or from the start for an earlier offset). The stream cursor keeps
 one counter at the bytes it has dropped (nothing before it can be located) and one that moves forward
 for requests (an earlier request counts from the first). Offsets an error may report after the window
-has moved past them are located when read (`LocatesOnlyForward`, `LocateEarly`, `FailAt`): a
+has moved past them are located when read (`!IsWhole`, `LocateEarly`, `FailAt`): a
 children block's `{` (for the unclosed-block error at the end), a `/* */` comment's start, a line
 continuation's `\` and a slashdash's `/-`. A random-mutation comparison of stream and in-memory reads
 of the suite's inputs finds no difference other than the documented order of encoding errors.
@@ -255,8 +270,11 @@ and is not built (§3).
 ### Text
 
 Every string, key, annotation, float lexeme and big integer is copied into the document's arena
-(`KdlDocumentStore`), a `BumpAllocator` whose pools are kept across `Clear` and `Read` (TomlBeef
-measured the page faults of fresh pools at up to 40% of parse time). A plain read drops integer
+(`KdlDocumentStore`), a FormatCore `TextArena` whose chunks are kept across `Clear` and `Read`
+(TomlBeef measured the page faults of fresh pools at up to 40% of parse time; the arena read
+documents 1-3% cheaper than the pool-recycling `BumpAllocator` it replaced). The node and entry
+tables are FormatCore `GrowList`s (inlined `Add`), linked through FormatCore's `Tree` over the node
+record's `ITreeRecord` accessors. A plain read drops integer
 lexemes (the canonical form writes integers in decimal); PreserveStyle will keep them.
 
 ### Mutation
@@ -373,9 +391,18 @@ this holds for the HTML-standard benchmark document.
 
 TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions in §9 question 4).
 
-- **Generation.** `[KdlObject]` is an `IComptimeTypeApply`: `KdlSerializerCodeGen.Emit` classifies
-  each public instance field at compile time and emits `KdlNodeName`, `KdlRead(KdlNode, allocator)`
-  and `KdlWrite(KdlNode)` into the type, plus `IKdlSerializable`. Emitted code is fully qualified,
+- **Generation.** `[KdlObject]` is an `IComptimeTypeApply`: `KdlSerializerCodeGen.Emit` emits the
+  signatures of `KdlNodeName`, `KdlRead(KdlNode, allocator)` and `KdlWrite(KdlNode)` (plus
+  `IKdlSerializable` and, for classes, `KdlClaimedChildNames` and `KdlArgumentsStart`) and FormatCore's
+  `MappingDriver` entry, a `[Comptime] KdlGen_` method in the type. Every body is
+  `Compiler.Mixin(KdlGen_(part))`: `Body` classifies the fields and writes the code when the method is
+  compiled. Because the evaluation's entry point is the user's own method, the converter and
+  `[KdlChildren]` subtype lookups (`Type.TypeDeclarations` filtered by FormatCore's
+  `Registry.IsVisible`) see exactly the user's project and its dependencies; inside `ApplyToType` they
+  had relied on `AlwaysVisible` and found nothing once a second project depended on KdlBeef. Planning
+  at body time also lets a type hold itself and handles generic types (stubs for the unspecialized
+  pass). Errors now point at the generated entry, with the same `[KdlObject] Type.field: …` text.
+  Naming, literals, integer bounds and type shapes are FormatCore's. Emitted code is fully qualified,
   reaches fields through `this.` and uses `_`-prefixed locals; enums are generated switches over their
   (named) cases, so nothing needs reflection at run time. A `[KdlObject]` base's methods are hidden
   (`new`) and called first. Unsupported field types, and roles on the wrong kind of field, stop the
@@ -388,7 +415,8 @@ TomlBeef's `[TomlObject]` design with KDL's roles (`plan.md` §4.10, decisions i
   arguments from the first free one. `[KdlObject]` fields are child nodes named after the field;
   `List<scalar>` a child holding the items as arguments; `List<[KdlObject]>` repeated children named
   after the element type (`KdlObjectAttribute.Name`, or the type name through its naming);
-  `[KdlChildren] List<T>` every child no other field claims (a static `sKdlClaimed` list), dispatched
+  `[KdlChildren] List<T>` every child no other field claims (a static `sKdlClaimed` array, built by a
+  mixed-in method), dispatched
   by node name to the concrete `[KdlObject]` types assignable to T found through
   `Type.TypeDeclarations`, and written through `as IKdlSerializable` so each item's own type decides.
   Names are kebab-case by default (`KdlNaming`), enum cases too.
