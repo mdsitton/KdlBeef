@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -1378,7 +1380,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		}
 		if (pos + 4 > mEnd)
 			Grow(pos, 4);
-		return KdlChar.Decode(mData, pos, out length);
+		return Utf8.Decode(mData, pos, out length);
 	}
 
 	[Inline]
@@ -1495,7 +1497,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IKdlCursor
 		{
 			char32 cp = DecodeAt(mPos, out length);
 			if ((uint32)cp < 0x20 || KdlChar.IsUnicodeSpace(cp))
-				KdlChar.AppendCodePointName(message, (uint32)cp);
+				Hex.AppendCodePointName(message, (uint32)cp);
 			else
 			{
 				message.Append('`');

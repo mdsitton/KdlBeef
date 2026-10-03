@@ -1,4 +1,6 @@
 using System;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -113,7 +115,7 @@ public struct KdlParseError
 	/// An error at byte `offset` of `input`, with the line and column computed from it.
 	internal static KdlParseError At(KdlErrorKind kind, StringView message, StringView input, int offset, int length = 1)
 	{
-		KdlChar.LineAndColumn(input, offset, let line, let column);
+		Utf8.LineAndColumn<KdlText>(input, offset, let line, let column);
 		return KdlParseError(kind, message, line, column, offset, length);
 	}
 

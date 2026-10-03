@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -789,7 +791,7 @@ public static class KdlBind
 		{
 			if (c == '_')
 				continue;
-			uint64 digit = KdlChar.HexDigitValue(c);
+			uint64 digit = Hex.DigitValue(c);
 			if (result > (uint64.MaxValue - digit) / radix)
 				return .Err;
 			result = result * radix + digit;

@@ -1,4 +1,6 @@
 using System;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -144,7 +146,7 @@ extension KdlReaderCore<TCursor>
 			uint32 radix = p[i + 1] == 'x' ? 16 : p[i + 1] == 'o' ? 8 : 2;
 			StringView radixName = radix == 16 ? "a hexadecimal" : radix == 8 ? "an octal" : "a binary";
 			i += 2;
-			if (i >= n || KdlChar.HexDigitValue(p[i]) >= radix)
+			if (i >= n || Hex.DigitValue(p[i]) >= radix)
 				return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: {radixName} prefix must be followed by a digit", offset, n));
 			uint64 magnitude = 0;
 			bool overflow = false;
@@ -152,7 +154,7 @@ extension KdlReaderCore<TCursor>
 			{
 				if (p[i] == '_')
 					continue;
-				uint32 digit = KdlChar.HexDigitValue(p[i]);
+				uint32 digit = Hex.DigitValue(p[i]);
 				if (digit >= radix)
 					return .Err(Fail(.InvalidNumber, scope $"Invalid number `{token}`: `{(char8)p[i]}` is not {radixName} digit", offset, n));
 				if (magnitude > (uint64.MaxValue - digit) / radix)
@@ -619,7 +621,7 @@ extension KdlReaderCore<TCursor>
 					i = skipped;
 					continue;
 				}
-				int length = Math.Max(KdlChar.Utf8SequenceLength(p[k]), 1);
+				int length = Math.Max(Utf8.SequenceLength(p[k]), 1);
 				output.Append((char8*)p + i, Math.Min(1 + length, n - i));
 				i = k + length;
 				continue;
@@ -688,7 +690,7 @@ extension KdlReaderCore<TCursor>
 			int digits = 0;
 			while (pos < end && data[pos] != '}')
 			{
-				uint8 digit = KdlChar.HexDigitValue(data[pos]);
+				uint8 digit = Hex.DigitValue(data[pos]);
 				if (digit == 255)
 					return .Err(Fail(.InvalidEscape, "A Unicode escape `\\u{…}` must contain only hex digits", errorAt));
 				if (++digits > 6)
@@ -702,7 +704,7 @@ extension KdlReaderCore<TCursor>
 				return .Err(Fail(.InvalidEscape, "A Unicode escape `\\u{…}` needs at least one hex digit", errorAt));
 			if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
 				return .Err(Fail(.InvalidEscape, "A Unicode escape must be a Unicode scalar value (not a surrogate, at most U+10FFFF)", errorAt));
-			KdlChar.EncodeUtf8(output, cp);
+			Utf8.Encode(output, cp);
 		default:
 			int skipped = SkipSpaceAndNewlines(data, pos, end);
 			if (skipped > pos)

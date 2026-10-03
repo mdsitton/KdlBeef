@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -206,7 +208,7 @@ public static class KdlCanonical
 				i++;
 				continue;
 			}
-			char32 cp = KdlChar.Decode(p, i, let length);
+			char32 cp = Utf8.Decode(p, i, let length);
 			if (!KdlChar.IsIdentifierChar(cp))
 				return false;
 			i += length;
@@ -247,11 +249,11 @@ public static class KdlCanonical
 			case '\r': output.Append("\\r");
 			case '\t': output.Append("\\t");
 			default:
-				char32 cp = KdlChar.Decode(p, i, let length);
+				char32 cp = Utf8.Decode(p, i, let length);
 				if (KdlChar.IsDisallowed(cp) || KdlChar.IsNewline(cp))
 				{
 					output.Append("\\u{");
-					KdlChar.AppendHex(output, (uint32)cp, 1);
+					Hex.Append(output, (uint32)cp, 1);
 					output.Append('}');
 				}
 				else
@@ -362,7 +364,7 @@ public static class KdlCanonical
 		{
 			if (p[i] == '_')
 				continue;
-			uint64 carry = KdlChar.HexDigitValue(p[i]);
+			uint64 carry = Hex.DigitValue(p[i]);
 			for (int k < limbs.Count)
 			{
 				uint64 product = (uint64)limbs[k] * radix + carry;

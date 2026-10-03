@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -393,7 +395,7 @@ extension KdlDocument
 		int i = 0;
 		while (i < s.Length)
 		{
-			char32 cp = KdlChar.Decode(s.Ptr, i, let length);
+			char32 cp = Utf8.Decode(s.Ptr, i, let length);
 			if (KdlChar.IsNewline(cp) || KdlChar.IsDisallowed(cp))
 				return false;
 			i += length;

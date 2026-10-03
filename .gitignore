@@ -32,3 +32,4 @@ bench/compare/js/node_modules/
 bench/compare/python/.venv/
 bench/compare/zig/.zig-cache/
 bench/compare/c/build/
+win-test.log

@@ -3,3 +3,9 @@ FileVersion = 1
 [Project]
 Name = "KdlBeef"
 TargetType = "BeefLib"
+
+# FormatCore: the shared core of the format libraries. Every workspace of this repository lists the
+# local checkout (../FormatCore) instead; a user's workspace gets this one, pinned in its lock file.
+[Dependencies]
+corlib = "*"
+FormatCore = {Git = "https://github.com/mdsitton/FormatCore.git", Version = "0.1"}

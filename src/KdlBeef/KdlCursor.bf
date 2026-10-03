@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -64,7 +66,7 @@ internal struct KdlLineCounter
 				mColumn = 1;
 				continue;
 			}
-			mPos += Math.Max(KdlChar.Utf8SequenceLength(text[mPos]), 1);
+			mPos += Math.Max(Utf8.SequenceLength(text[mPos]), 1);
 			mColumn++;
 		}
 	}
@@ -82,7 +84,7 @@ internal struct KdlByteCursor : IKdlCursor
 	{
 		mInput = input;
 		mMaxInputBytes = config.MaxInputBytes;
-		mStart = KdlChar.StartsWithBom(input.Ptr, input.Length) ? 3 : 0;
+		mStart = Utf8.StartsWithBom(input.Ptr, input.Length) ? 3 : 0;
 		mLines = .(mStart);
 	}
 
@@ -94,11 +96,11 @@ internal struct KdlByteCursor : IKdlCursor
 		if (mMaxInputBytes > 0 && mInput.Length > mMaxInputBytes)
 			return .Err(KdlParseError(.ResourceLimitExceeded, scope $"The input ({mInput.Length} bytes) exceeds MaxInputBytes ({mMaxInputBytes})", 1, 1, 0, 0));
 		let message = scope String();
-		int bad = KdlChar.FindInvalid(mInput.Ptr, mStart, mInput.Length, message, let kind, let length);
+		int bad = Utf8.FindInvalid<KdlText>(mInput.Ptr, mStart, mInput.Length, message, let kind, let length);
 		if (bad >= 0)
 		{
 			Locate(bad, let line, let column);
-			return .Err(KdlParseError(kind, message, line, column, bad, length));
+			return .Err(KdlParseError(KdlText.ErrorKindOf(kind), message, line, column, bad, length));
 		}
 		return mStart;
 	}
@@ -134,7 +136,7 @@ internal struct KdlByteCursor : IKdlCursor
 		if (target < mLines.mPos)
 		{
 			// Behind the counter (an error before the last position asked for): count from the start
-			KdlChar.LineAndColumn(mInput, target, out line, out column);
+			Utf8.LineAndColumn<KdlText>(mInput, target, out line, out column);
 			return true;
 		}
 		mLines.AdvanceTo(mInput.Ptr, target, mInput.Length);
@@ -225,7 +227,7 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 		// Enough to see a BOM (or the whole input, if it is shorter)
 		while (mRaw < 3 && !mDone)
 			ReadMore();
-		int start = KdlChar.StartsWithBom(Buffer, mRaw) ? 3 : 0;
+		int start = Utf8.StartsWithBom(Buffer, mRaw) ? 3 : 0;
 		mValid = start;
 		mLines = .(start);
 		mLocated = .(start);
@@ -335,15 +337,15 @@ internal struct KdlBufferedStreamCursor : IKdlCursor
 	{
 		char8* text = Buffer - mBase;
 		int from = mBase + mValid;
-		int to = mDone ? mBase + mRaw : KdlChar.CompleteSequencesEnd(text, from, mBase + mRaw);
+		int to = mDone ? mBase + mRaw : Utf8.CompleteSequencesEnd(text, from, mBase + mRaw);
 		if (mState.mHasError)
 			to = Math.Min(to, mState.mErrorOffset);
 		let message = scope String();
-		int bad = KdlChar.FindInvalid(text, from, to, message, let kind, let length);
+		int bad = Utf8.FindInvalid<KdlText>(text, from, to, message, let kind, let length);
 		if (bad >= 0)
 		{
 			mValid = bad - mBase;
-			SetError(kind, message, bad, length);
+			SetError(KdlText.ErrorKindOf(kind), message, bad, length);
 			return;
 		}
 		mValid = to - mBase;
