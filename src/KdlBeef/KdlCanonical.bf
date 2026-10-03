@@ -323,7 +323,7 @@ public static class KdlCanonical
 	/// @brief Append an integer lexeme of any size (any radix, underscores, sign) in decimal.
 	internal static void AppendIntegerLexeme(String output, StringView text)
 	{
-		char8* p =text.Ptr;
+		char8* p = text.Ptr;
 		int n = text.Length;
 		int i = 0;
 		bool negative = false;
@@ -338,95 +338,14 @@ public static class KdlCanonical
 			radix = p[i + 1] == 'x' ? 16 : p[i + 1] == 'o' ? 8 : 2;
 			i += 2;
 		}
-		if (radix == 10)
-		{
-			// Already decimal: the digits without underscores and leading zeros, in linear time (the
-			// conversion below is quadratic in the length)
-			while (i < n && (p[i] == '0' || p[i] == '_'))
-				i++;
-			if (i == n)
-			{
-				output.Append('0');
-				return;
-			}
-			if (negative)
-				output.Append('-');
-			for (; i < n; i++)
-			{
-				if (p[i] != '_')
-					output.Append(p[i]);
-			}
-			return;
-		}
-		// Little-endian base-2^32 limbs: multiply-add each digit, then divide by 10^9 repeatedly
-		let limbs = scope List<uint32>();
-		for (; i < n; i++)
-		{
-			if (p[i] == '_')
-				continue;
-			uint64 carry = Hex.DigitValue(p[i]);
-			for (int k < limbs.Count)
-			{
-				uint64 product = (uint64)limbs[k] * radix + carry;
-				limbs[k] = (uint32)product;
-				carry = product >> 32;
-			}
-			if (carry != 0)
-				limbs.Add((uint32)carry);
-		}
-		while (!limbs.IsEmpty && limbs.Back == 0)
-			limbs.PopBack();
-		if (limbs.IsEmpty)
-		{
-			output.Append('0');
-			return;
-		}
-		let chunks = scope List<uint32>();
-		while (!limbs.IsEmpty)
-		{
-			uint64 remainder = 0;
-			for (int k = limbs.Count - 1; k >= 0; k--)
-			{
-				uint64 current = (remainder << 32) | limbs[k];
-				limbs[k] = (uint32)(current / 1000000000);
-				remainder = current % 1000000000;
-			}
-			chunks.Add((uint32)remainder);
-			while (!limbs.IsEmpty && limbs.Back == 0)
-				limbs.PopBack();
-		}
-		if (negative)
-			output.Append('-');
-		chunks.Back.ToString(output);
-		for (int k = chunks.Count - 2; k >= 0; k--)
-		{
-			let digits = scope String();
-			chunks[k].ToString(digits);
-			output.Append('0', 9 - digits.Length);
-			output.Append(digits);
-		}
+		BigDecimal.AppendRadixAsDecimal(output, text.Substring(i), radix, negative);
 	}
 
 	/// @brief Append a double that has no written form: the shortest round-trip digits, with `.0`
-	/// added to integral values and the exponent as `E±`.
+	/// added to integral values and the exponent as `E±` (FormatCore's KdlCanonical layout).
+	[Inline]
 	internal static void AppendDouble(String output, double v)
 	{
-		let text = scope String();
-		v.ToString(text);
-		int e = text.IndexOf('E');
-		if (e < 0)
-			e = text.IndexOf('e');
-		StringView mantissa = e >= 0 ? text.Substring(0, e) : text;
-		output.Append(mantissa);
-		if (!mantissa.Contains('.'))
-			output.Append(".0");
-		if (e >= 0)
-		{
-			output.Append('E');
-			StringView exponent = text.Substring(e + 1);
-			if (!exponent.StartsWith('-') && !exponent.StartsWith('+'))
-				output.Append('+');
-			output.Append(exponent);
-		}
+		ShortestDouble.Append(output, v, FloatLayout.KdlCanonical);
 	}
 }

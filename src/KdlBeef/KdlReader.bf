@@ -318,14 +318,16 @@ internal class KdlReaderCore<TCursor> where TCursor : IInputCursor
 
 	KdlReadConfig mConfig;
 	int mNodeCount;
-	// CollectErrors: errors so far, where the last one was, and the steps recovery left to do
-	int mErrorCount;
+	// CollectErrors: where the last error was, and the steps recovery left to do (whether to go on after
+	// an error is mErrors, below)
 	int mLastErrorOffset;
 	/// The start of the string being read (-1: none), where recovery restarts after an error in it.
 	int mStringStart;
 	bool mEndAfterRecovery;
 	bool mClosingAtEnd;
-	// The two largest fields last, so the hot fields above stay at small offsets
+	// The cold and large fields last, so the hot fields above stay at small offsets (measured: the cursor
+	// and the error placed first cost up to 1% of the instructions per byte)
+	ErrorPolicy mErrors;
 	KdlParseError mError;
 	internal TCursor mCursor;
 
@@ -359,7 +361,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IInputCursor
 		mBlockCloseEnd = -1;
 		mInputFailed = false;
 		mNodeCount = 0;
-		mErrorCount = 0;
+		mErrors = .(config.CollectErrors, config.MaxErrors);
 		mLastErrorOffset = -1;
 		mStringStart = -1;
 		mEndAfterRecovery = false;
@@ -400,7 +402,7 @@ internal class KdlReaderCore<TCursor> where TCursor : IInputCursor
 	{
 		bool fatal = mInputFailed || mError.mKind == .ResourceLimitExceeded || mError.mKind == .IoError ||
 			mError.mKind == .InvalidUtf8 || mError.mKind == .DisallowedCodePoint;
-		if (!mConfig.CollectErrors || fatal || mState == .Start || (mConfig.MaxErrors > 0 && ++mErrorCount >= mConfig.MaxErrors))
+		if (mErrors.ShouldStop(fatal || mState == .Start))
 		{
 			mState = .Failed;
 			return;

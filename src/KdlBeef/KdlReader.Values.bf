@@ -25,7 +25,7 @@ extension KdlReaderCore<TCursor>
 	[Inline]
 	bool PastStringLimit(String buffer)
 	{
-		return mConfig.MaxStringBytes > 0 && buffer.Length > mConfig.MaxStringBytes;
+		return Limits.Exceeds(mConfig.MaxStringBytes, buffer.Length);
 	}
 
 	KdlFailure StringLimitError(int start)
@@ -33,6 +33,9 @@ extension KdlReaderCore<TCursor>
 		return Fail(.ResourceLimitExceeded, scope $"A string of more than {mConfig.MaxStringBytes} bytes exceeds MaxStringBytes ({mConfig.MaxStringBytes})", start, Math.Max(mPos - start, 1));
 	}
 
+	/// Inlined into ReadValue, its only caller: left to LLVM, it stopped being inlined once ParseNumber
+	/// (inlined into it) shrank, and stream reads measured 2-4% more instructions per byte.
+	[Inline]
 	Result<KdlValue, KdlFailure> ReadValueToken(String buffer)
 	{
 		if (!Avail(mPos))
@@ -128,8 +131,10 @@ extension KdlReaderCore<TCursor>
 	{
 		// The common forms first, in one pass; anything else (radixes, underscores, long or invalid
 		// tokens) falls through to the full parse below, so errors are unchanged
-		if (TryParsePlainNumber(token, var plain))
-			return .Ok(plain);
+		// (FormatCore's one-pass parse: an integer of 1-18 digits, or a decimal on Clinger's fast path,
+		// with KDL's leading zeros and `+`)
+		if (DecimalParse.TryParsePlain(token, .LeadingZerosAndPlus, let plain))
+			return .Ok(plain.mIsFloat ? KdlValue.Float(plain.mFloat, token) : KdlValue.Integer(plain.mInteger, token));
 
 		char8* p = token.Ptr;
 		int n = token.Length;
@@ -208,109 +213,13 @@ extension KdlReaderCore<TCursor>
 			return .Ok(MakeInteger(negative, magnitude, overflow, token));
 		}
 
-		// Double.Parse takes no underscores: copy without them (on the stack for any sane length)
-		StringView digits = token;
-		if (token.Contains('_'))
-		{
-			char8* clean = n <= 128 ? scope:: char8[128]* : scope:: char8[n]*;
-			int length = 0;
-			for (int j < n)
-			{
-				if (p[j] != '_')
-					clean[length++] = p[j];
-			}
-			digits = .(clean, length);
-		}
-		// KDL's `.`, whatever the current culture's decimal separator. Out of range is not a failure: the
-		// parse gives ±infinity or ±0 (and the lexeme is kept); a failure would be a bug, not an overflow
-		switch (double.Parse(digits, KdlChar.sNumberFormat))
-		{
-		case .Ok(let parsed):
+		// Correctly rounded, underscores skipped, `.` whatever the current culture (FormatCore). Out of
+		// range is not a failure: the parse gives ±infinity or ±0 (and the lexeme is kept); a failure
+		// would be a bug, not an overflow
+		if (DecimalParse.ParseDouble(token, let parsed))
 			return .Ok(.Float(parsed, token));
-		case .Err:
-			return .Err(Fail(.InvalidNumber, scope $"The number `{token}` could not be converted to a double", offset, n));
-		}
+		return .Err(Fail(.InvalidNumber, scope $"The number `{token}` could not be converted to a double", offset, n));
 	}
-
-	/// One-pass parse of the common numbers, `[sign]digits[.digits][(e|E)[sign]digits]` without
-	/// underscores:
-	/// - an integer of 1–18 digits (leading zeros allowed, as in KDL), valid as written and unable to
-	///   overflow int64 (TomlBeef's TryParsePlainInteger);
-	/// - a decimal with a fraction or exponent whose digits fit an exact double mantissa (at most 2^53,
-	///   19 digits) and whose decimal exponent is within ±22: then mantissa and power of ten are both
-	///   exact, and one IEEE multiply or divide rounds correctly (Clinger's fast path), bit-identical to
-	///   Double.Parse (TomlBeef's TryParsePlainFloat, with KDL's grammar).
-	/// Anything else (a radix, underscores, more digits, a larger exponent, anything invalid) returns false
-	/// and takes the full path. The integer part is scanned once for both.
-	[Inline]
-	static bool TryParsePlainNumber(StringView token, out KdlValue value)
-	{
-		value = default;
-		char8* ptr = token.Ptr;
-		int length = token.Length;
-		int pos = (ptr[0] == '-' || ptr[0] == '+') ? 1 : 0;
-
-		uint64 mantissa = 0;
-		int intStart = pos;
-		while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - intStart < 19)
-			mantissa = mantissa * 10 + ((uint8)ptr[pos++] - (uint8)'0');
-		int intDigits = pos - intStart;
-		if (intDigits == 0)
-			return false;
-		if (pos == length)
-		{
-			// An integer
-			if (intDigits > 18)
-				return false;
-			value = .Integer((ptr[0] == '-') ? -(int64)mantissa : (int64)mantissa, token);
-			return true;
-		}
-
-		int exponent = 0;
-		bool isFloat = false;
-		if (ptr[pos] == '.')
-		{
-			pos++;
-			int fracStart = pos;
-			while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - fracStart + intDigits < 19)
-				mantissa = mantissa * 10 + ((uint8)ptr[pos++] - (uint8)'0');
-			if (pos == fracStart)
-				return false;
-			exponent = -(pos - fracStart);
-			isFloat = true;
-		}
-		if (pos < length && (ptr[pos] == 'e' || ptr[pos] == 'E'))
-		{
-			pos++;
-			bool negativeExponent = false;
-			if (pos < length && (ptr[pos] == '-' || ptr[pos] == '+'))
-				negativeExponent = ptr[pos++] == '-';
-			int expStart = pos;
-			int expValue = 0;
-			while (pos < length && (uint8)ptr[pos] - (uint8)'0' <= 9 && pos - expStart < 4)
-				expValue = expValue * 10 + ((uint8)ptr[pos++] - (uint8)'0');
-			if (pos == expStart)
-				return false;
-			exponent += negativeExponent ? -expValue : expValue;
-			isFloat = true;
-		}
-		// A leftover character (an underscore, a 20th digit, a 5-digit exponent, anything invalid) goes to
-		// the full path
-		if (pos != length || !isFloat || mantissa > (1UL << 53) || exponent < -22 || exponent > 22)
-			return false;
-
-		double result = (double)mantissa;
-		if (exponent < 0)
-			result /= cExactPowersOf10[-exponent];
-		else
-			result *= cExactPowersOf10[exponent];
-		value = .Float((ptr[0] == '-') ? -result : result, token);
-		return true;
-	}
-
-	/// Powers of ten that a double holds exactly (5^22 < 2^53).
-	const double[23] cExactPowersOf10 = .(1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
-		1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22);
 
 	/// Skips `(digit | '_')*`. @return The offset after them.
 	[Inline]
