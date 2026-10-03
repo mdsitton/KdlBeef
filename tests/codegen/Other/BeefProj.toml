@@ -1,0 +1,9 @@
+FileVersion = 1
+
+[Project]
+Name = "Other"
+TargetType = "BeefLib"
+
+[Dependencies]
+corlib = "*"
+KdlBeef = "*"

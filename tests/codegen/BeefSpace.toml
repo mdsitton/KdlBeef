@@ -1,0 +1,14 @@
+FileVersion = 1
+
+# The [KdlObject] generator's build-time checks (test-codegen.sh): each fixture in src/Fixtures.bf is
+# built alone (-define=FIXTURE_<name>) and must stop the build with its message, or build when it is a
+# positive control. Other is a second project depending on KdlBeef: with it, converters registered in
+# Fixtures were not found before the generator's lookups moved to the mixin stage (OkRegisteredConverter).
+[Workspace]
+StartupProject = "Fixtures"
+
+[Projects]
+Fixtures = {Path = "."}
+Other = {Path = "Other"}
+KdlBeef = {Path = "../.."}
+FormatCore = {Path = "../../../FormatCore"}

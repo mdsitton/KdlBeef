@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using FormatCore.Mapping;
+using internal FormatCore;
 
 namespace KdlBeef;
 
@@ -53,29 +55,91 @@ public static class KdlSerializerCodeGen
 		ChildContent
 	}
 
-	/// @brief Emit IKdlSerializable into `type`.
+	/// The user-side comptime entry FormatCore's MappingDriver emits into every [KdlObject] type.
+	const String cEntry = "KdlGen_";
+
+	/// @brief Emit IKdlSerializable's signatures into `type` (ApplyToType). Every body is planned and
+	/// written later, when the method is compiled, through the [Comptime] entry emitted into the type
+	/// (FormatCore's MappingDriver): converter and [KdlChildren] subtype lookups then see the user's
+	/// project and its dependencies, however many projects use KdlBeef, and a type can hold itself
+	/// (`List<Node> children`) without the type-initialization cycle.
 	/// @param type A class or struct carrying [KdlObject].
 	/// @param naming How names become KDL names.
 	/// @param nodeName The type's node name (KdlObjectAttribute.Name), or empty for its name.
 	[Comptime]
 	public static void Emit(Type type, KdlNaming naming, StringView nodeName)
 	{
-		let read = scope String();
-		let write = scope String();
-		let ownerName = type.GetFullName(.. scope .());
-
-		// A [KdlObject] base already has the methods: hide them, and read and write its fields first
-		bool baseIsObject = type.BaseType != null && type.BaseType != typeof(Object) && type.BaseType.HasCustomAttribute<KdlObjectAttribute>();
+		let code = scope String();
+		// A [KdlObject] base already has the methods: hide them (each level reads its own fields after
+		// calling its base's)
+		bool baseIsObject = BaseIsObject(type);
 		StringView hide = baseIsObject ? "new " : "";
+		// The unspecialized pass of a generic type: stub bodies (each specialization gets its own pass)
+		bool open = MappingDriver.IsOpenType(type);
+		if (!open)
+			MappingDriver.EmitEntry(type, cEntry, "KdlBeef.KdlSerializerCodeGen.Body", baseIsObject);
 
 		let name = scope String();
 		if (!nodeName.IsEmpty)
 			name.Append(nodeName);
 		else
 			ApplyNaming(type.GetName(.. scope .()), naming, name);
-		read.AppendF("public {}StringView KdlNodeName => {};\n", hide, AppendLiteral(.. scope .(), name));
-		read.AppendF("public {}Result<void, KdlBeef.KdlParseError> KdlRead(KdlBeef.KdlNode _node, System.ITypedAllocator _alloc = null){}\n{{\n", hide, type.IsValueType ? " mut" : "");
-		write.AppendF("public {}Result<void, KdlBeef.KdlParseError> KdlWrite(KdlBeef.KdlNode _node)\n{{\n", hide);
+		code.AppendF("public {}StringView KdlNodeName => {};\n", hide, AppendLiteral(.. scope .(), name));
+
+		// The claimed child names, as the [KdlChildren] code sees them (for a class through a virtual
+		// property, so that a base's list also leaves alone the children a subclass's fields claim), and
+		// the first argument a [KdlArguments] list takes (a subclass's [KdlArgument] fields move it)
+		code.AppendF("static {}System.StringView[] sKdlClaimed = KdlClaimedNames_() ~ delete _;\nstatic {}System.StringView[] KdlClaimedNames_()\n{{\n", hide, hide);
+		AppendPart(code, open, 2, "return null;\n");
+		code.Append("}\n");
+		if (!type.IsValueType)
+		{
+			StringView overriding = baseIsObject ? "override" : "virtual";
+			code.AppendF("protected {} Span<StringView> KdlClaimedChildNames => sKdlClaimed;\nprotected {} int KdlArgumentsStart\n{{\n\tget\n\t{{\n", overriding, overriding);
+			AppendPart(code, open, 3, "return 0;\n");
+			code.Append("\t}\n}\n");
+		}
+		code.AppendF("public {}Result<void, KdlBeef.KdlParseError> KdlRead(KdlBeef.KdlNode _node, System.ITypedAllocator _alloc = null){}\n{{\n", hide, type.IsValueType ? " mut" : "");
+		AppendPart(code, open, 0, "return .Ok;\n");
+		code.AppendF("}}\npublic {}Result<void, KdlBeef.KdlParseError> KdlWrite(KdlBeef.KdlNode _node)\n{{\n", hide);
+		AppendPart(code, open, 1, "return .Ok;\n");
+		code.Append("}\n");
+		Compiler.EmitAddInterface(type, typeof(IKdlSerializable));
+		Compiler.EmitTypeBody(type, code);
+	}
+
+	/// A generated member's body: the mixin of `part` (or, for an open generic type, `stub`).
+	[Comptime]
+	static void AppendPart(String code, bool open, int part, StringView stub)
+	{
+		if (open)
+			code.AppendF("\t{}", stub);
+		else
+			MappingDriver.AppendBody(code, "\t", cEntry, part);
+	}
+
+	[Comptime]
+	static bool BaseIsObject(Type type)
+	{
+		return type.BaseType != null && type.BaseType != typeof(Object) && type.BaseType.HasCustomAttribute<KdlObjectAttribute>();
+	}
+
+	/// @brief The body of one generated member of `type`, mixed in when the member is compiled (through
+	/// the [Comptime] entry Emit put into the type, so lookups see the user's project).
+	/// @param type The [KdlObject] type.
+	/// @param part 0: KdlRead, 1: KdlWrite, 2: KdlClaimedNames_, 3: KdlArgumentsStart.
+	/// @param args Unused.
+	/// @return The code.
+	[Comptime]
+	public static String Body(Type type, int part, String args)
+	{
+		var naming = KdlNaming.KebabCase;
+		if (type.GetCustomAttribute<KdlObjectAttribute>() case .Ok(let attribute))
+			naming = attribute.Naming;
+		let ownerName = type.GetFullName(.. scope .());
+		bool baseIsObject = BaseIsObject(type);
+		let read = new String();
+		let write = scope String();
 		if (baseIsObject)
 		{
 			read.Append("\tTry!(base.KdlRead(_node, _alloc));\n");
@@ -85,27 +149,24 @@ public static class KdlSerializerCodeGen
 		// 1. The chain's shared places (argument positions, claimed child names), checked for conflicts
 		let claimed = scope String();
 		ScanChain(type, naming, ownerName, let nextArgument, claimed, let claimedCount);
-		// The claimed names, as the [KdlChildren] code sees them: for a class through a virtual property,
-		// so that a base's list also leaves alone the children a subclass's fields claim
-		if (claimedCount > 0)
-			read.Insert(0, scope $"static StringView[{claimedCount}] sKdlClaimed = .({claimed});\n");
-		// Likewise the first argument a [KdlArguments] list takes: a subclass's [KdlArgument] fields move
-		// it, including for a list its base declares (whose code was generated before the subclass)
-		StringView claimedExpr;
+		if (part == 2)
+		{
+			read.Clear();
+			read.AppendF("return new System.StringView[]({});\n", claimed);
+			return read;
+		}
+		if (part == 3)
+		{
+			read.Clear();
+			read.AppendF("return {};\n", nextArgument);
+			return read;
+		}
+		StringView claimedExpr = type.IsValueType ? "sKdlClaimed" : "this.KdlClaimedChildNames";
 		let argumentsStart = scope String();
 		if (type.IsValueType)
-		{
-			claimedExpr = (claimedCount > 0) ? "sKdlClaimed" : "default";
 			argumentsStart.AppendF("{}", nextArgument);
-		}
 		else
-		{
-			claimedExpr = "this.KdlClaimedChildNames";
-			StringView overriding = baseIsObject ? "override" : "virtual";
-			read.Insert(0, scope $"protected {overriding} Span<StringView> KdlClaimedChildNames => {(claimedCount > 0) ? "sKdlClaimed" : "default"};\n");
-			read.Insert(0, scope $"protected {overriding} int KdlArgumentsStart => {nextArgument};\n");
 			argumentsStart.Append("this.KdlArgumentsStart");
-		}
 
 		// 2. Every field's plan (its kinds and role), checked before any code is written
 		let plans = scope List<FieldPlan>();
@@ -145,12 +206,11 @@ public static class KdlSerializerCodeGen
 			}
 		}
 
-		read.Append("\treturn .Ok;\n}\n");
-		write.Append("\treturn .Ok;\n}\n");
-
-		Compiler.EmitAddInterface(type, typeof(IKdlSerializable));
-		Compiler.EmitTypeBody(type, read);
-		Compiler.EmitTypeBody(type, write);
+		read.Append("\treturn .Ok;\n");
+		write.Append("\treturn .Ok;\n");
+		if (part == 1)
+			read.Set(write);
+		return read;
 	}
 
 	/// How one field maps: what Emit writes code from. For a List field, mElement* describe its items.
@@ -446,37 +506,24 @@ public static class KdlSerializerCodeGen
 
 	/// The V of a Dictionary<K, V>, or null. (Which keys work is IsKeyType's question.)
 	[Comptime]
-	static Type DictionaryValue(Type type)
-	{
-		if (let specialized = type as SpecializedGenericType)
-		{
-			if (specialized.UnspecializedType == typeof(Dictionary<,>))
-				return specialized.GetGenericArg(1);
-		}
-		return null;
-	}
+	static Type DictionaryValue(Type type) => TypeShapes.DictionaryValue(type);
 
 	/// The K of a Dictionary<K, V>, or null.
 	[Comptime]
-	static Type DictionaryKey(Type type)
-	{
-		if (let specialized = type as SpecializedGenericType)
-		{
-			if (specialized.UnspecializedType == typeof(Dictionary<,>))
-				return specialized.GetGenericArg(0);
-		}
-		return null;
-	}
+	static Type DictionaryKey(Type type) => TypeShapes.DictionaryKey(type);
 
 	/// The converter registered with [KdlConverter(typeof(target))] that the type being compiled can see,
-	/// or null. Two such registrations stop the build.
+	/// or null. Two such registrations stop the build. Only in the mixin stage (Body): there "current" is
+	/// the user's project, and FormatCore's Registry.IsVisible is the user's project and its
+	/// dependencies (inside ApplyToType the user's declarations were seen only while the user's project
+	/// was KdlBeef's only dependent).
 	[Comptime]
 	static Type FindRegisteredConverter(Type target)
 	{
 		Type found = null;
 		for (let declaration in Type.TypeDeclarations)
 		{
-			if (!(declaration.DeclaredInCurrent || declaration.DeclaredInDependency || declaration.AlwaysVisible))
+			if (!Registry.IsVisible(declaration))
 				continue;
 			if (!(declaration.GetCustomAttribute<KdlConverterAttribute>() case .Ok(let registration)) || registration.mTarget != target)
 				continue;
@@ -501,7 +548,7 @@ public static class KdlSerializerCodeGen
 		}
 		for (let declaration in Type.TypeDeclarations)
 		{
-			if (!(declaration.DeclaredInCurrent || declaration.DeclaredInDependency || declaration.AlwaysVisible))
+			if (!Registry.IsVisible(declaration))
 				continue;
 			if (!declaration.HasCustomAttribute<KdlObjectAttribute>())
 				continue;
@@ -515,15 +562,7 @@ public static class KdlSerializerCodeGen
 
 	/// The T of a List<T>, or null.
 	[Comptime]
-	static Type ListElement(Type type)
-	{
-		if (let specialized = type as SpecializedGenericType)
-		{
-			if (specialized.UnspecializedType == typeof(List<>))
-				return specialized.GetGenericArg(0);
-		}
-		return null;
-	}
+	static Type ListElement(Type type) => TypeShapes.ListElement(type);
 
 	/// A [KdlObject] type's node name: its Name, or its type name through its Naming.
 	[Comptime]
@@ -540,87 +579,51 @@ public static class KdlSerializerCodeGen
 			ApplyNaming(type.GetName(.. scope .()), .KebabCase, name);
 	}
 
-	/// Appends the KDL name for `name`. Words start at an upper-case letter that follows a lower-case
-	/// letter or digit, or that ends an acronym (the last capital before a lower-case letter), so
-	/// `HTTPPort` splits as HTTP, Port and `Utf8Name` as Utf8, Name; underscores also split.
+	/// Appends the KDL name for `name` (FormatCore's Naming: words split at case changes, keeping
+	/// acronyms together, `HTTPPort` as HTTP, Port; underscores also split).
 	[Comptime]
 	static void ApplyNaming(StringView name, KdlNaming naming, String result)
 	{
-		if (naming == .AsDeclared)
-		{
-			result.Append(name);
-			return;
-		}
-		int words = 0;
-		int i = 0;
-		while (i < name.Length)
-		{
-			if (name[i] == '_')
-			{
-				i++;
-				continue;
-			}
-			int start = i++;
-			while (i < name.Length && name[i] != '_' && !(name[i].IsUpper && (name[i - 1].IsLower || name[i - 1].IsDigit ||
-				(name[i - 1].IsUpper && i + 1 < name.Length && name[i + 1].IsLower))))
-				i++;
+		Naming.Apply(name, PolicyOf(naming), result);
+	}
 
-			if (words > 0 && naming != .CamelCase)
-				result.Append(naming == .KebabCase ? '-' : '_');
-			for (int j = start; j < i; j++)
-				result.Append((naming == .CamelCase && words > 0 && j == start) ? name[j].ToUpper : name[j].ToLower);
-			words++;
+	/// @brief FormatCore's naming policy for a KdlNaming.
+	/// @param naming The KDL naming.
+	/// @return The policy.
+	public static NamingPolicy PolicyOf(KdlNaming naming)
+	{
+		switch (naming)
+		{
+		case .KebabCase: return .KebabCase;
+		case .AsDeclared: return .AsDeclared;
+		case .SnakeCase: return .SnakeCase;
+		case .CamelCase: return .CamelCase;
 		}
 	}
 
-	/// Appends `text` as a Beef string literal.
+	/// Appends `text` as a Beef string literal (FormatCore's Literal); a name with a control character
+	/// stops the build.
 	[Comptime]
 	static void AppendLiteral(String code, StringView text)
 	{
-		code.Append('"');
 		for (let c in text.RawChars)
 		{
-			switch (c)
-			{
-			case '"': code.Append("\\\"");
-			case '\\': code.Append("\\\\");
-			default:
-				if ((uint8)c < 0x20)
-					Runtime.FatalError(scope $"[KdlName] \"{text}\" contains a control character");
-				code.Append(c);
-			}
+			if ((uint8)c < 0x20)
+				Runtime.FatalError(scope $"[KdlName] \"{text}\" contains a control character");
 		}
-		code.Append('"');
+		Literal.Append(code, text);
 	}
 
-	/// The smallest and largest value of an integer type below 64 unsigned bits, as int64 source
-	/// expressions.
+	/// The smallest and largest value of an integer type as int64 source expressions (FormatCore's
+	/// IntegerBounds: a 64-bit unsigned type's minimum is 0; read through IsUInt64's path for its range).
 	[Comptime]
 	static void IntegerRange(Type type, String min, String max)
 	{
-		int bits = type.Size * 8;
-		if (bits == 64)
-		{
-			min.Append("int64.MinValue");
-			max.Append("int64.MaxValue");
-		}
-		else if (type.IsSigned)
-		{
-			min.AppendF("{}", -(1L << (bits - 1)));
-			max.AppendF("{}", (1L << (bits - 1)) - 1);
-		}
-		else
-		{
-			min.Append("0");
-			max.AppendF("{}", (1L << bits) - 1);
-		}
+		IntegerBounds.Range(type, min, max);
 	}
 
 	[Comptime]
-	static bool IsUInt64(Type type)
-	{
-		return type.IsInteger && type.Size == 8 && !type.IsSigned;
-	}
+	static bool IsUInt64(Type type) => TypeShapes.IsUInt64(type);
 
 	/// "a, b, c": the enum's case names, for error messages.
 	[Comptime]
@@ -640,7 +643,7 @@ public static class KdlSerializerCodeGen
 	[Comptime]
 	static void NewExpr(StringView typeName, StringView args, String code)
 	{
-		code.AppendF("((_alloc != null) ? new:_alloc {0}({1}) : new {0}({1}))", typeName, args);
+		Ownership.NewExpr(code, typeName, args);
 	}
 
 	/// The code that finds a scalar's value into `_r` (current name first, then aliases).
@@ -910,23 +913,23 @@ public static class KdlSerializerCodeGen
 		code.Append("\t{\n");
 		EmitReplaceList(code, "\t\t", name, listType, element);
 		code.AppendF("\t\tfor (let _c in _node.Children)\n\t\t{{\n\t\t\tif (KdlBeef.KdlBind.IsClaimed(_c.Name, {}))\n\t\t\t\tcontinue;\n", claimedExpr);
-		// The item types are found when this method is compiled, not now: they may derive from the type
-		// being generated (a Container holding Rows and Columns), which is not complete yet
-		code.AppendF("\t\t\tSystem.Compiler.Mixin(KdlBeef.KdlSerializerCodeGen.ChildrenDispatch(typeof({}), ", element.GetFullName(.. scope .()));
-		AppendLiteral(code, ownerName);
-		code.Append(", ");
-		AppendLiteral(code, name);
-		code.Append("));\n\t\t}\n\t}\n");
+		// Written here, in the mixin stage: every item type is complete (they may derive from the type
+		// being generated, a Container holding Rows and Columns), and the subtype lookup sees the user's
+		// project
+		let dispatch = ChildrenDispatch(element, ownerName, name);
+		code.Append(dispatch);
+		delete dispatch;
+		code.Append("\t\t}\n\t}\n");
 	}
 
 	/// @brief The `switch` that reads child `_c` into the [KdlChildren] list `fieldName`, one case per
-	/// [KdlObject] type the list can hold. Mixed into the generated KdlRead when it is compiled.
+	/// [KdlObject] type the list can hold.
 	/// @param element The list's item type.
 	/// @param ownerName The type holding the list, for errors.
 	/// @param fieldName The list field.
 	/// @return The code.
 	[Comptime]
-	public static String ChildrenDispatch(Type element, String ownerName, String fieldName)
+	static String ChildrenDispatch(Type element, StringView ownerName, StringView fieldName)
 	{
 		let types = scope List<Type>();
 		ChildTypes(element, types);

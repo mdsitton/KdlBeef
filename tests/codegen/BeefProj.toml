@@ -1,0 +1,9 @@
+FileVersion = 1
+
+[Project]
+Name = "Fixtures"
+StartupObject = "Fixtures.Program"
+
+[Dependencies]
+corlib = "*"
+KdlBeef = "*"
