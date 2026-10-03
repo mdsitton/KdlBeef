@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
+using FormatCore;
+using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -83,8 +85,8 @@ public class KdlDocument
 	public KdlReadConfig ReadConfig = .();
 
 	internal KdlDocumentStore mStore ~ delete _;
-	internal List<KdlNodeRecord> mNodes ~ delete _;
-	internal List<KdlEntryRecord> mEntries ~ delete _;
+	internal GrowList<KdlNodeRecord> mNodes ~ delete _;
+	internal GrowList<KdlEntryRecord> mEntries ~ delete _;
 	/// Positions mode: the source range of each node (by ID) and entry (by index); empty otherwise.
 	internal List<KdlRangeRecord> mNodeRanges ~ delete _;
 	internal List<KdlRangeRecord> mEntryRanges ~ delete _;
@@ -113,7 +115,7 @@ public class KdlDocument
 	/// The reader behind Read, kept for its buffers.
 	KdlReader mReader ~ delete _;
 	/// Scratch for Read (open nodes) and Write (a node's property order).
-	List<uint32> mNodeStack ~ delete _;
+	GrowList<uint32> mNodeStack ~ delete _;
 	List<int32> mPropertyOrder ~ delete _;
 
 	/// @brief Create an empty document.
@@ -303,47 +305,16 @@ public class KdlDocument
 			}
 			return Read(file, config);
 		}
+		// The whole file within MaxInputBytes (FormatCore's read shell: a larger file fails from its size)
 		let bytes = scope List<uint8>();
-		if (ReadFileBytes(path, config.MaxInputBytes, bytes) case .Err(var error))
+		if (ReadShell.ReadFileBytes(path, config.MaxInputBytes, bytes) case .Err(let inputError))
 		{
 			Clear();
+			var error = KdlText.ErrorOf(inputError);
 			error.SetSource(config.SourceName);
 			return .Err(error);
 		}
 		return ReadBytes(bytes, config);
-	}
-
-	/// Reads a whole file into `bytes`, but with a `maxInputBytes` budget never more than that: a larger
-	/// file fails from its size before anything is read, and one that grows while read stops at the
-	/// limit.
-	static Result<void, KdlParseError> ReadFileBytes(StringView path, int maxInputBytes, List<uint8> bytes)
-	{
-		let file = scope FileStream();
-		if (file.Open(path, .Read, .Read) case .Err)
-			return .Err(KdlParseError(.IoError, "Cannot read the file", 0, 0, 0, 0));
-		int64 size = file.Length;
-		if (maxInputBytes > 0 && size > maxInputBytes)
-			return .Err(KdlParseError(.ResourceLimitExceeded, scope $"The input ({size} bytes) exceeds MaxInputBytes ({maxInputBytes})", 1, 1, 0, 0));
-		// The expected size in one read (plus a byte to see the end), then more if the file grew
-		int chunk = (int)size + 1;
-		while (true)
-		{
-			int filled = bytes.Count;
-			bytes.Count = filled + chunk;
-			switch (file.TryRead(.(bytes.Ptr + filled, chunk)))
-			{
-			case .Ok(let read):
-				bytes.Count = filled + Math.Max(read, 0);
-				if (read <= 0)
-					return .Ok;
-				if (maxInputBytes > 0 && bytes.Count > maxInputBytes)
-					return .Err(KdlParseError(.ResourceLimitExceeded, scope $"The input exceeds MaxInputBytes ({maxInputBytes})", 1, 1, 0, 0));
-				chunk = Math.Max(chunk - read, 4096);
-			case .Err:
-				bytes.Count = filled;
-				return .Err(KdlParseError(.IoError, "Cannot read the file", 0, 0, 0, 0));
-			}
-		}
 	}
 
 	/// Turns the reader's events into records. In Positions mode, also records each node's and entry's
