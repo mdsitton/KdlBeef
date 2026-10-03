@@ -1,6 +1,5 @@
 using System;
 using FormatCore;
-using internal FormatCore;
 using internal KdlBeef;
 
 namespace KdlBeef;
@@ -67,108 +66,16 @@ public enum KdlErrorKind : uint8
 	InvalidValue
 }
 
-/// A read error with location information for precise error reporting.
+/// @brief A read error with its location (FormatCore's ParseError with KDL's error kinds): kind,
+/// message, source name, line, column (in code points), byte offset and length; `ToString` formats it
+/// as `source:line:column: message`.
 ///
 /// The error owns nothing and needs no cleanup, so it can be dropped freely (including by `Try!`).
 /// `mMessage` views a per-thread buffer: it stays valid until the next KdlParseError is created on the
-/// same thread, which in practice means the next failing KdlBeef call. Copy it to keep it longer.
-public struct KdlParseError
-{
-	/// Per-thread message and source-name storage, freed when the thread exits.
-	static LazyTLS<String> sMessageBuffer = new .() ~ delete _;
-	static LazyTLS<String> sSourceBuffer = new .() ~ delete _;
+/// same thread, which in practice means the next failing KdlBeef call. Copy it to keep it longer
+/// (`KdlDiagnostic`), or `Detach` an error that views a document's text (KdlDocument.Errors).
+public typealias KdlParseError = FormatCore.ParseError<KdlErrorKind>;
 
-	public KdlErrorKind mKind;
-	/// @brief Human-readable description. Valid until the next error on this thread.
-	public StringView mMessage;
-	/// @brief Name of the input the position refers to; empty if unnamed. Valid until the next error
-	/// on this thread.
-	public StringView mSource;
-	/// @brief 1-based line (0 when there is no position).
-	public int32 mLine;
-	/// @brief 1-based column, in code points.
-	public int32 mColumn;
-	/// @brief Byte offset into the input.
-	public int32 mOffset;
-	/// @brief Length of the erroneous span in bytes.
-	public int32 mLength;
-
-	/// @brief Creates a new error at the given location.
-	/// @param kind The category of error.
-	/// @param message Human-readable description.
-	/// @param line 1-based line number.
-	/// @param column 1-based column number.
-	/// @param offset Byte offset into the input.
-	/// @param length Length of the erroneous span in bytes.
-	public this(KdlErrorKind kind, StringView message, int line, int column, int offset, int length = 1)
-	{
-		mKind = kind;
-		mLine = (int32)line;
-		mColumn = (int32)column;
-		mOffset = (int32)offset;
-		mLength = (int32)length;
-
-		mMessage = Store(sMessageBuffer.Value, message);
-		mSource = default;
-	}
-
-	/// An error at byte `offset` of `input`, with the line and column computed from it.
-	internal static KdlParseError At(KdlErrorKind kind, StringView message, StringView input, int offset, int length = 1)
-	{
-		Utf8.LineAndColumn<KdlText>(input, offset, let line, let column);
-		return KdlParseError(kind, message, line, column, offset, length);
-	}
-
-	/// Copies `text` into a per-thread buffer and returns a view of it.
-	static StringView Store(String buffer, StringView text)
-	{
-		// The text may itself be a view of the buffer (an error rebuilt from a previous one)
-		char8* start = buffer.Ptr;
-		if (text.Ptr >= start && text.Ptr < start + buffer.Length)
-		{
-			let copy = scope String(text);
-			buffer.Set(copy);
-		}
-		else
-			buffer.Set(text);
-		return buffer;
-	}
-
-	/// @brief Set the source name the position refers to. Stored like the message: valid until the next
-	/// error on this thread.
-	/// @param source The source name, e.g. a file path.
-	public void SetSource(StringView source) mut
-	{
-		mSource = Store(sSourceBuffer.Value, source);
-	}
-
-	/// @brief Copy the message and source name into this thread's error buffers, so the error no longer
-	/// depends on where they were: needed for an error from KdlDocument.Errors (whose text the document
-	/// owns) that must outlive the document. Afterwards the error is like any other: valid until the next
-	/// error on this thread.
-	public void Detach() mut
-	{
-		mMessage = Store(sMessageBuffer.Value, mMessage);
-		let source = mSource;
-		mSource = default;
-		if (!source.IsEmpty)
-			mSource = Store(sSourceBuffer.Value, source);
-	}
-
-	/// @brief Formats the error as `source:line:column: message`, dropping the parts that are unknown
-	/// (no source name, or no position: line 0).
-	/// @param strBuffer The string to append to.
-	public override void ToString(String strBuffer)
-	{
-		if (!mSource.IsEmpty)
-		{
-			strBuffer.Append(mSource);
-			strBuffer.Append(':');
-		}
-		if (mLine > 0)
-			strBuffer.AppendF("{}:{}:", mLine, mColumn);
-		if (!mSource.IsEmpty || mLine > 0)
-			strBuffer.Append(' ');
-		strBuffer.Append(mMessage);
-	}
-}
+/// @brief An error that owns its text, for keeping it beyond the next error on the thread (a list of
+/// diagnostics, errors from several readers or threads). Delete it when done.
+public typealias KdlDiagnostic = FormatCore.Diagnostic<KdlErrorKind>;
